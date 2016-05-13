@@ -1,0 +1,10 @@
+Package: com.inoahdev.rmaslr
+Name: rmaslr
+Depends: 
+Version: 0.0.1
+Architecture: iphoneos-arm
+Description: An awesome tool of some sort!!
+Maintainer: iNoahDev
+Author: iNoahDev
+Section: System
+Tag: role::hacker
