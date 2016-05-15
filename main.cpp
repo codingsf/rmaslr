@@ -447,6 +447,8 @@ int main(int argc, const char * argv[]) {
             if (access(path.c_str(), F_OK) != 0) {
                 error("Invalid Path provided - " << path);
             } else if (access(path.c_str(), R_OK) != 0) {
+                error("Unable to read file at path, Please change permissions of the file");
+            } else {
                 error("Unable to access write permissions for file at path, Please change permissions of the file");
             }
         }
@@ -664,6 +666,13 @@ int main(int argc, const char * argv[]) {
                 error("Application does not contain multiple architectures");
             }
         }
+        
+        struct mach_header *header = new struct mach_header;
+        
+        fseek(file, 0x0, SEEK_SET);
+        fread(header, sizeof(struct mach_header), 1, file);
+        
+        headers.insert(std::pair<uint32_t, struct mach_header *>(0x0, header));
     }
 
     for (auto const &it : headers) {
@@ -683,10 +692,7 @@ int main(int argc, const char * argv[]) {
         uint32_t flags = Swap(header->magic, header->flags);
         flags &= ~MH_PIE;
         
-        if (header->magic == MH_CIGAM || header->magic == MH_CIGAM_64) {
-            flags = Swap_(flags); //swap back
-        }
-        
+        flags = Swap(header->magic, flags);
         header->flags = flags;
         
         fseek(file, offset, SEEK_SET);
@@ -701,9 +707,9 @@ int main(int argc, const char * argv[]) {
         }
         
         if (fat) 
-            std::cout << "Architecture " << NXGetArchInfoFromCpuType(Swap(header->magic, header->cputype), Swap(header->magic, header->cpusubtype))->name << " no longer contains ASLR" << std::endl;
+            std::cout << "Removed ASLR! Architecture " << NXGetArchInfoFromCpuType(Swap(header->magic, header->cputype), Swap(header->magic, header->cpusubtype))->name << " no longer contains ASLR" << std::endl;
         else 
-            std::cout << "Mach-O Executable no longer contains ASLR" << std::endl;
+            std::cout << "Removed ASLR! Mach-O Executable no longer contains ASLR" << std::endl;
     }
     
     return 0;
