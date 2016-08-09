@@ -127,17 +127,31 @@ int main(int argc, const char * argv[], const char * envp[]) {
         CFStringRef executable_path = nullptr;
         CFIndex count = CFArrayGetCount(apps);
 
+        CFStringRef slash = CFStringCreateWithCString(CFAllocatorGetDefault(), "/", kCFStringEncodingUTF8);
+
         for (CFIndex i = 0; i < count; i++) {
             CFStringRef bundle_id = (CFStringRef)CFArrayGetValueAtIndex(apps, i);
             CFStringRef display_name = SBSCopyLocalizedApplicationNameForDisplayIdentifier(bundle_id);
             CFStringRef executable_path_ = SBSCopyExecutablePathForDisplayIdentifier(bundle_id);
 
+            //compare backwards to find last '/'
+            CFIndex executable_path_length = CFStringGetLength(executable_path_);
+
+            CFRange range = CFRangeMake(0, executable_path_length);
+            if (!CFStringFindWithOptions(executable_path_, slash, CFRangeMake(0, executable_path_length), kCFCompareBackwards, &range)) {
+                continue;
+            }
+
+            CFIndex location = executable_path_length - range.location;
+
+            CFStringRef executable_name = CFStringCreateWithSubstring(CFAllocatorGetDefault(), executable_path_, CFRangeMake(location, executable_path_length - location));
             executable_path = executable_path_;
+
             if (CFStringCompare(application, bundle_id, 0) == kCFCompareEqualTo) {
                 break;
             } else if (CFStringCompare(application, display_name, 0) == kCFCompareEqualTo) {
                 break;
-            } else if (CFStringCompare(application, executable_path, 0) == kCFCompareEqualTo) {
+            } else if (CFStringCompare(application, executable_name, 0) == kCFCompareEqualTo) {
                 break;
             }
 
