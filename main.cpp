@@ -602,6 +602,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
                     had_aslr = had_aslr_;
                 }
 
+                default_architectures.erase(it);
                 fseek(file, current_offset, SEEK_SET);
             }
 
@@ -629,10 +630,26 @@ int main(int argc, const char * argv[], const char * envp[]) {
 
     if (had_aslr) {
         if (uses_application) {
-            fprintf(stdout, "Note: Application (%s) may not run til you have signed it's executable (at path %s) (preferably with ldid)\n", name, binary_path);
+            fprintf(stdout, "\x1B[33mNote:\x1B[0m Application (%s) may not run til you have signed it's executable (at path %s) (preferably with ldid)\n", name, binary_path);
         } else {
-            fprintf(stdout, "Note: File may not run til you have signed it (preferably with ldid)\n");
+            fprintf(stdout, "\x1B[33mNote:\x1B[0m File may not run til you have signed it (preferably with ldid)\n");
         }
+    }
+
+    if (default_architectures.size() != 0) {
+        std::string architectures = default_architectures.front()->name;
+
+        if (default_architectures.size() > 1) {
+            architectures.append(", ");
+            default_architectures.erase(default_architectures.begin());
+
+            for (const auto& archInfo : default_architectures) {
+                architectures.append(", ");
+                architectures.append(archInfo->name);
+            }
+        }
+
+        assert_("Was unable to find & remove ASLR from architecture(s) \"%s\"", architectures.c_str());
     }
 
     fclose(file);
