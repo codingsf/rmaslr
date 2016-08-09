@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <string>
+#include <vector>
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <mach-o/loader.h>
@@ -23,6 +24,20 @@ extern "C" CFStringRef SBSCopyExecutablePathForDisplayIdentifier(CFStringRef bun
 
 #define assert_(str, ...) fprintf(stderr, "\x1B[31mError:\x1B[0m " str "\n", ##__VA_ARGS__); return -1
 #define error(str, ...) fprintf(stderr, "\x1B[31mError:\x1B[0m " str "\n", ##__VA_ARGS__); exit(0)
+
+//compatibility with linter-clang and older headers
+#if !defined(FAT_MAGIC_64) && !defined(FAT_CIGAM_64)
+struct fat_arch_64 {
+    cpu_type_t cputype;
+    cpu_subtype_t cpusubtype;
+    uint64_t offset;
+    uint64_t size;
+    uint32_t align;
+};
+
+#define FAT_MAGIC_64 0xcafebabf
+#define FAT_CIGAM_64 0xbfbafeca
+#endif
 
 #ifdef DEBUG
 #define log(str, ...) fprintf(stderr, "[rmaslr] " __FILE__ ":%d DEBUG: " str "\n", __LINE__, ##__VA_ARGS__);
@@ -43,7 +58,7 @@ static inline uint64_t swap(uint32_t magic, uint64_t value) {
     if (magic == MH_CIGAM || magic == MH_CIGAM_64 || magic == FAT_CIGAM || magic == FAT_CIGAM_64) {
         value = (value & 0x00000000ffffffff) << 32 | (value & 0xffffffff00000000) >> 32;
         value = (value & 0x0000ffff0000ffff) << 16 | (value & 0xffff0000ffff0000) >> 16;
-        value = (value & 0x00ff00ff00ff00ff) << 8  | (value & 0xff00ff00ff00ff00) >> 8;
+        value = (value & 0x00ff00ff00ff0ff) << 8  | (value & 0xff00ff00ff00ff00) >> 8;
     }
 
     return value;
@@ -54,6 +69,8 @@ void print_usage() {
     fprintf(stdout, "Options:\n");
     fprintf(stdout, "    -a,     --app/--application,   Remove ASLR for an application\n");
     fprintf(stdout, "    -apps,  --applications,        Print a list of Applications\n");
+    fprintf(stdout, "    -arch,  --architecture,        Single out an architecture to remove aslr from");
+    fprintf(stdout, "    -archs, --architectures,       Print all possible architectures, and if application/binary is provided, print all architectures present");
     fprintf(stdout, "    -b,     --binary,              Remove ASLR for a Mach-O Executable\n");
     fprintf(stdout, "    -?/-h,  --help,                Print this message\n");
 
@@ -68,9 +85,16 @@ CFComparisonResult in_case_sensitive_compare(const CFStringRef string1, const CF
 int main(int argc, const char * argv[], const char * envp[]) {
     if (argc < 2) {
         print_usage();
-    } else if (argc > 3) {
-        assert_("Too many arguments provided");
     }
+    //for fancy debug messages
+    bool uses_application = false;
+    bool display_archs_only = false;
+
+    const char *name = nullptr;
+    const char *binary_path = nullptr;
+
+    std::vector<const NXArchInfo *> default_architectures;
+    auto default_architectures_original_size = 0;
 
     const char *argument = argv[1];
     if (argument[0] != '-') {
@@ -83,8 +107,16 @@ int main(int argc, const char * argv[], const char * envp[]) {
     }
 
     if (strcmp(option, "?") == 0 || strcmp(option, "h") == 0) {
+        if (argc > 2) {
+            assert_("Please run %s seperately", argument);
+        }
+
         print_usage();
     } else if (strcmp(option, "apps") == 0 || strcmp(option, "-applications") == 0) {
+        if (argc > 2) {
+            assert_("Please run %s seperately", argument);
+        }
+
         CFArrayRef applications = SBSCopyApplicationDisplayIdentifiers(false, false);
         CFIndex applications_count = CFArrayGetCount(applications);
 
@@ -108,135 +140,211 @@ int main(int argc, const char * argv[], const char * envp[]) {
         }
 
         fprintf(stdout, "\n");
+        return 0;
+    } else if (strcmp(option, "archs") == 0 || strcmp(option, "archs") == 0) {
+        if (argc > 2) {
+            assert_("Please run %s seperately", argument);
+        }
+
+        //to sort alphabetically
+        std::vector<const char *> arch_names;
+
+        const NXArchInfo *archInfos = NXGetAllArchInfos();
+        while (archInfos && archInfos->name) {
+            arch_names.push_back(archInfos->name);
+            archInfos++; //retrieve next "const NXArchInfo *" object
+        }
+
+        std::sort(arch_names.begin(), arch_names.end(), [](const char *string1, const char *string2) {
+            return strcmp(string1, string2) < 0;
+        });
+
+        for (auto const& arch : arch_names) {
+            fprintf(stdout, "%s\n", arch);
+        }
 
         return 0;
     }
 
-    //for fancy debug messages
-    bool uses_application = false;
-    const char *install_path = nullptr;
-
-    if (strcmp(option, "a") == 0 || strcmp(option, "app") == 0 || strcmp(option, "application") == 0) {
-        if (argc < 3) {
-            assert_("Please provide an application display-name/identifier/executable-name");
+    for (int i = 1; i < argc; i++) {
+        argument = argv[i];
+        if (argument[0] != '-') {
+            assert_("%s is not an option", argument);
         }
 
-        CFStringRef application = CFStringCreateWithCString(CFAllocatorGetDefault(), argv[2], kCFStringEncodingUTF8);
-        CFArrayRef apps = SBSCopyApplicationDisplayIdentifiers(false, false);
+        option = &argument[1];
+        if (option[0] == '-') {
+            option++;
+        }
 
-        CFStringRef executable_path = nullptr;
-        CFIndex count = CFArrayGetCount(apps);
+        bool last_argument = i == argc - 1;
 
-        CFStringRef slash = CFStringCreateWithCString(CFAllocatorGetDefault(), "/", kCFStringEncodingUTF8);
-
-        for (CFIndex i = 0; i < count; i++) {
-            CFStringRef bundle_id = (CFStringRef)CFArrayGetValueAtIndex(apps, i);
-            CFStringRef display_name = SBSCopyLocalizedApplicationNameForDisplayIdentifier(bundle_id);
-            CFStringRef executable_path_ = SBSCopyExecutablePathForDisplayIdentifier(bundle_id);
-
-            //compare backwards to find last '/'
-            CFIndex executable_path_length = CFStringGetLength(executable_path_);
-
-            CFRange range = CFRangeMake(0, executable_path_length);
-            if (!CFStringFindWithOptions(executable_path_, slash, CFRangeMake(0, executable_path_length), kCFCompareBackwards, &range)) {
-                continue;
+        if (strcmp(option, "a") == 0 || strcmp(option, "app") == 0 || strcmp(option, "application") == 0) {
+            if (last_argument) {
+                assert_("Please provide an application display-name/identifier/executable-name");
             }
 
-            CFIndex location = executable_path_length - range.location;
+            i++;
+            name = argv[i];
 
-            CFStringRef executable_name = CFStringCreateWithSubstring(CFAllocatorGetDefault(), executable_path_, CFRangeMake(location, executable_path_length - location));
-            executable_path = executable_path_;
+            CFStringRef application = CFStringCreateWithCString(CFAllocatorGetDefault(), name, kCFStringEncodingUTF8);
+            CFArrayRef apps = SBSCopyApplicationDisplayIdentifiers(false, false);
 
-            if (CFStringCompare(application, bundle_id, 0) == kCFCompareEqualTo) {
-                break;
-            } else if (CFStringCompare(application, display_name, 0) == kCFCompareEqualTo) {
-                break;
-            } else if (CFStringCompare(application, executable_name, 0) == kCFCompareEqualTo) {
-                break;
+            CFStringRef executable_path = nullptr;
+            CFIndex count = CFArrayGetCount(apps);
+
+            CFStringRef slash = CFStringCreateWithCString(CFAllocatorGetDefault(), "/", kCFStringEncodingUTF8);
+
+            for (CFIndex i = 0; i < count; i++) {
+                CFStringRef bundle_id = (CFStringRef)CFArrayGetValueAtIndex(apps, i);
+                CFStringRef display_name = SBSCopyLocalizedApplicationNameForDisplayIdentifier(bundle_id);
+                CFStringRef executable_path_ = SBSCopyExecutablePathForDisplayIdentifier(bundle_id);
+
+                executable_path = executable_path_;
+
+                if (CFStringCompare(application, bundle_id, 0) == kCFCompareEqualTo) {
+                    break;
+                } else if (CFStringCompare(application, display_name, 0) == kCFCompareEqualTo) {
+                    break;
+                }
+
+                //compare backwards to find last '/'
+                CFIndex executable_path_length = CFStringGetLength(executable_path_);
+
+                CFRange range = CFRangeMake(0, executable_path_length);
+                if (!CFStringFindWithOptions(executable_path_, slash, CFRangeMake(0, executable_path_length), kCFCompareBackwards, &range)) {
+                    continue;
+                }
+
+                CFIndex location = executable_path_length - range.location;
+                CFStringRef executable_name = CFStringCreateWithSubstring(CFAllocatorGetDefault(), executable_path_, CFRangeMake(location, executable_path_length - location));
+
+                if (CFStringCompare(application, executable_name, 0) == kCFCompareEqualTo) {
+                    break;
+                }
+
+                executable_path = nullptr;
             }
 
-            executable_path = nullptr;
-        }
-
-        if (!executable_path) {
-            assert_("Unable to find application %s", argv[2]);
-        }
-
-        uses_application = true;
-        install_path = CFStringGetCStringPtr(executable_path, kCFStringEncodingUTF8);
-
-        if (access(install_path, R_OK) != 0) {
-            const char *application_string = CFStringGetCStringPtr(application, kCFStringEncodingUTF8);
-            if (access(install_path, F_OK) != 0) {
-                assert_("Application (%s)'s executable does not exist", application_string);
+            if (!executable_path) {
+                assert_("Unable to find application %s", name);
             }
 
-            assert_("Unable to read Application (%s)'s executable", application_string);
-        }
+            uses_application = true;
+            binary_path = CFStringGetCStringPtr(executable_path, kCFStringEncodingUTF8);
 
-    } else if (strcmp(option, "b") == 0 || strcmp(option, "binary") == 0) {
-        if (argc < 3) {
-            assert_("Please provide a path to a mach-o binary");
-        }
+            if (access(binary_path, R_OK) != 0) {
+                const char *application_string = CFStringGetCStringPtr(application, kCFStringEncodingUTF8);
+                if (access(binary_path, F_OK) != 0) {
+                    assert_("Application (%s)'s executable does not exist", application_string);
+                }
 
-        std::string path = argv[2];
-        if (path[0] != '/') {
-            char *buf = new char[4096];
-            if (!getcwd(buf, 4096)) {
-                assert_("Unable to get the current directory, is the current directory deleted?");
+                assert_("Unable to read Application (%s)'s executable", application_string);
+            }
+        } else if (strcmp(option, "b") == 0 || strcmp(option, "binary") == 0) {
+            if (last_argument) {
+                assert_("Please provide a path to a mach-o binary");
             }
 
-            //use std::string for safety (so we don't end up writing outside buf, while trying to append a '/')
-            std::string buffer = buf;
+            i++;
+            std::string path = argv[i];
 
-            //unable to use back() even though we're on c++14
-            if (*(buffer.end() - 1) != '/') {
-                buffer.append(1, '/');
+            if (path[0] != '/') {
+                char *buf = new char[4096];
+                if (!getcwd(buf, 4096)) {
+                    assert_("Unable to get the current directory, is the current directory deleted?");
+                }
+
+                //use std::string for safety (so we don't end up writing outside buf, while trying to append a '/')
+                std::string buffer = buf;
+
+                //unable to use back() even though we're on c++14
+                if (*(buffer.end() - 1) != '/') {
+                    buffer.append(1, '/');
+                }
+
+                path.insert(0, buffer);
             }
 
-            path.insert(0, buffer);
-        }
+            binary_path = path.c_str();
+            if (access(binary_path, R_OK) != 0) {
+                if (access(binary_path, F_OK) != 0) {
+                    assert_("File at path (%s) does not exist", binary_path);
+                }
 
-        install_path = path.c_str();
-        if (access(install_path, R_OK) != 0) {
-            if (access(install_path, F_OK) != 0) {
-                assert_("File at path (%s) does not exist", install_path);
+                assert_("Unable to read file at path (%s)", binary_path);
+            }
+        } else if (strcmp(option, "arch") == 0 || strcmp(option, "architecture") == 0) {
+            if (last_argument) {
+                assert_("Please provide an architecture name");
             }
 
-            assert_("Unable to read file at path (%s)", install_path);
+            if (!binary_path) {
+                assert_("Please select an application or binary first");
+            }
+
+            int j = ++i;
+
+            for (; j < argc; j++) {
+                const char *architecture = argv[j];
+                const NXArchInfo *archInfo = NXGetArchInfoFromName(architecture);
+
+                if (!archInfo) {
+                    break;
+                }
+
+                default_architectures.push_back(archInfo);
+            }
+
+            default_architectures_original_size = default_architectures.size();
+            if (!default_architectures_original_size) {
+                assert_("%s is not a valid architecture", argv[j]);
+            }
+
+            i = j;
+        } else if (strcmp(option, "archs") == 0 || strcmp(option, "architectures") == 0) {
+            if (!binary_path) {
+                assert_("Please select an application or binary first");
+            }
+
+            if (default_architectures.size()) {
+                assert_("Cannot both display and select an arch to remove ASLR from");
+            }
+
+            display_archs_only = true;
+        } else {
+            assert_("Unrecognized option %s", argument);
         }
-    } else {
-        assert_("Unrecognized option %s", argument);
     }
 
-    if (!install_path) {
+    if (!binary_path) {
         assert_("Unable to get path");
     }
 
-    FILE *file = fopen(install_path, "r+");
+    FILE *file = fopen(binary_path, "r+");
     if (!file) {
         if (uses_application) {
-            assert_("Unable to open application (%s)'s executable", argv[2]);
+            assert_("Unable to open application (%s)'s executable", name);
         }
 
-        assert_("Unable to open file at path %s", argv[2]);
+        assert_("Unable to open file at path %s", name);
     }
 
     struct stat sbuf;
-    if (stat(install_path, &sbuf) != 0) {
+    if (stat(binary_path, &sbuf) != 0) {
         if (uses_application) {
-            assert_("Unable to get information on application (%s)'s executable", argv[2]);
+            assert_("Unable to get information on application (%s)'s executable", name);
         }
 
-        assert_("Unable to get information on file at path %s", argv[2]);
+        assert_("Unable to get information on file at path %s", name);
     }
 
     if (sbuf.st_size < sizeof(struct mach_header_64)) {
         if (uses_application) {
-            assert_("Application (%s)'s executable is not a valid mach-o", argv[2]);
+            assert_("Application (%s)'s executable is not a valid mach-o", name);
         }
 
-        assert_("File at path (%s) is not a valid mach-o", argv[2]);
+        assert_("File at path (%s) is not a valid mach-o", name);
     }
 
     uint32_t magic;
@@ -260,24 +368,24 @@ int main(int argc, const char * argv[], const char * envp[]) {
             break;
         default: {
             if (uses_application) {
-                assert_("Application (%s)'s executable is not a valid mach-o", argv[2]);
+                assert_("Application (%s)'s executable is not a valid mach-o", name);
             }
 
-            assert_("File at path (%s) is not a valid mach-o", argv[2]);
+            assert_("File at path (%s) is not a valid mach-o", name);
         }
     }
 
     struct mach_header header;
     long header_offset = 0x0;
 
-    auto remove_aslr = [&file, &argv, &header, &header_offset, &uses_application](const NXArchInfo *archInfo = nullptr) {
+    auto remove_aslr = [&file, &name, &header, &header_offset, &uses_application](const NXArchInfo *archInfo = nullptr) {
         uint32_t flags = swap(header.magic, header.flags);
         if (!(flags & MH_PIE)) {
             if (archInfo) {
                 fprintf(stdout, "Architecture %s does not contain aslr\n", archInfo->name);
             } else {
                 if (uses_application) {
-                    fprintf(stdout, "Application (%s) does not contain aslr\n", argv[2]);
+                    fprintf(stdout, "Application (%s) does not contain aslr\n", name);
                 } else {
                     fprintf(stdout, "File does not contain aslr\n");
                 }
@@ -304,7 +412,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
             }
 
             if (!can_continue) {
-                //even though result should be whether or not file had aslr, return false so that the "sign file" message does not show (because nothing happened)
+                //even though result should be whether or not aslr was removed, return true so that
                 return false;
             }
         }
@@ -337,19 +445,27 @@ int main(int argc, const char * argv[], const char * envp[]) {
         uint32_t architectures_count = swap(magic, fat.nfat_arch);
         if (!architectures_count) {
             if (uses_application) {
-                assert_("Application (%s)'s executable cannot have 0 architectures", argv[2]);
+                assert_("Application (%s)'s executable cannot have 0 architectures", name);
             }
 
-            assert_("File at path (%s) cannot have 0 architectures", argv[2]);
+            assert_("File at path (%s) cannot have 0 architectures", name);
+        }
+
+        if (display_archs_only) {
+            if (uses_application) {
+                fprintf(stdout, "Application (%s) contains %d architectures:\n", name, architectures_count);
+            } else {
+                fprintf(stdout, "File contains %d architectures:\n", architectures_count);
+            }
         }
 
         if (magic == FAT_MAGIC_64 || magic == FAT_CIGAM_64) {
             if (architectures_count * sizeof(struct fat_arch_64) > sbuf.st_size) {
                 if (uses_application) {
-                    assert_("Application (%s)'s executable is too small to contain %d architectures", argv[2], architectures_count);
+                    assert_("Application (%s)'s executable is too small to contain %d architectures", name, architectures_count);
                 }
 
-                assert_("File at path (%s) is too small to contain %d architectures", argv[2], architectures_count);
+                assert_("File at path (%s) is too small to contain %d architectures", name, architectures_count);
             }
 
             for (uint32_t i = 0; i < architectures_count; i++) {
@@ -359,29 +475,51 @@ int main(int argc, const char * argv[], const char * envp[]) {
                 long current_offset = ftell(file);
                 header_offset = static_cast<long>(swap(magic, arch.offset));
 
+                const NXArchInfo *archInfo = NXGetArchInfoFromCpuType(swap(magic, static_cast<uint32_t>(arch.cputype)), swap(magic, static_cast<uint32_t>(arch.cpusubtype)));
+                if (!archInfo) {
+                    assert_("Architecture at offset %.16lX is not valid", current_offset);
+                }
+
+                if (display_archs_only) {
+                    fprintf(stdout, "%s\n", archInfo->name);
+                    continue;
+                }
+
+                auto it = default_architectures.begin();
+                for (; it != default_architectures.end(); it++) {
+                    if (*it != archInfo) {
+                        continue;
+                    }
+
+                    break;
+                }
+
+                if (it == default_architectures.end()) {
+                    continue;
+                }
+
                 //basic validation
                 if (header_offset < current_offset) {
                     if (uses_application) {
-                        assert_("Application (%s) executable's architecture #%d is placed before its declaration", argv[2], i + 1);
+                        assert_("Application (%s) executable's architecture #%d is placed before its declaration", name, i + 1);
                     }
 
-                    assert_("File at path (%s) architecture #%d is placed before its declaration", argv[2], i + 1);
+                    assert_("File at path (%s) architecture #%d is placed before its declaration", name, i + 1);
                 }
 
                 if (header_offset > sbuf.st_size) {
                     if (uses_application) {
-                        assert_("Application (%s) executable's architecture #%d is placed past end of file", argv[2], i + 1);
+                        assert_("Application (%s) executable's architecture #%d is placed past end of file", name, i + 1);
                     }
 
-                    assert_("File at path (%s) architecture #%d is placed past end of file", argv[2], i + 1);
+                    assert_("File at path (%s) architecture #%d is placed past end of file", name, i + 1);
                 }
 
                 fseek(file, header_offset, SEEK_SET);
                 fread(&header, sizeof(struct mach_header), 1, file);
 
-                const NXArchInfo *archInfo = nullptr;
-                if (architectures_count > 1) { //display fat files with only 1 arch as non-fat
-                    archInfo = NXGetArchInfoFromCpuType(swap(magic, static_cast<uint32_t>(arch.cputype)), swap(magic, static_cast<uint32_t>(arch.cpusubtype)));
+                if (architectures_count < 2) { //display fat files with less than 2 archs as non-fat
+                    archInfo = nullptr;
                 }
 
                 bool had_aslr_ = remove_aslr(archInfo);
@@ -389,15 +527,20 @@ int main(int argc, const char * argv[], const char * envp[]) {
                     had_aslr = had_aslr_;
                 }
 
+                default_architectures.erase(it);
                 fseek(file, current_offset, SEEK_SET);
+            }
+
+            if (display_archs_only) {
+                return 0;
             }
         } else {
             if (architectures_count * sizeof(struct fat_arch) > sbuf.st_size) {
                 if (uses_application) {
-                    assert_("Application (%s)'s executable is too small to contain %d architectures", argv[2], architectures_count);
+                    assert_("Application (%s)'s executable is too small to contain %d architectures", name, architectures_count);
                 }
 
-                assert_("File at path (%s) is too small to contain %d architectures", argv[2], architectures_count);
+                assert_("File at path (%s) is too small to contain %d architectures", name, architectures_count);
             }
 
             for (uint32_t i = 0; i < architectures_count; i++) {
@@ -407,29 +550,51 @@ int main(int argc, const char * argv[], const char * envp[]) {
                 long current_offset = ftell(file);
                 header_offset = static_cast<long>(swap(magic, arch.offset));
 
+                const NXArchInfo *archInfo = NXGetArchInfoFromCpuType(swap(magic, static_cast<uint32_t>(arch.cputype)), swap(magic, static_cast<uint32_t>(arch.cpusubtype)));
+                if (!archInfo) {
+                    assert_("Architecture at offset %.16lX is not valid", current_offset);
+                }
+
+                if (display_archs_only) {
+                    fprintf(stdout, "%s\n", archInfo->name);
+                    continue;
+                }
+
+                auto it = default_architectures.begin();
+                for (; it != default_architectures.end(); it++) {
+                    if (*it != archInfo) {
+                        continue;
+                    }
+
+                    break;
+                }
+
+                if (it == default_architectures.end()) {
+                    continue;
+                }
+
                 //basic validation
                 if (header_offset < current_offset) {
                     if (uses_application) {
-                        assert_("Application (%s) executable's architecture #%d is placed before its declaration", argv[2], i + 1);
+                        assert_("Application (%s) executable's architecture #%d is placed before its declaration", name, i + 1);
                     }
 
-                    assert_("File at path (%s) architecture #%d is placed before its declaration", argv[2], i + 1);
+                    assert_("File at path (%s) architecture #%d is placed before its declaration", name, i + 1);
                 }
 
                 if (header_offset > sbuf.st_size) {
                     if (uses_application) {
-                        assert_("Application (%s) executable's architecture #%d is placed past end of file", argv[2], i + 1);
+                        assert_("Application (%s) executable's architecture #%d is placed past end of file", name, i + 1);
                     }
 
-                    assert_("File at path (%s) architecture #%d is placed past end of file", argv[2], i + 1);
+                    assert_("File at path (%s) architecture #%d is placed past end of file", name, i + 1);
                 }
 
                 fseek(file, header_offset, SEEK_SET);
                 fread(&header, sizeof(struct mach_header), 1, file);
 
-                const NXArchInfo *archInfo = nullptr;
-                if (architectures_count > 1) { //display fat files with only 1 arch as non-fat
-                    archInfo = NXGetArchInfoFromCpuType(swap(magic, static_cast<uint32_t>(arch.cputype)), swap(magic, static_cast<uint32_t>(arch.cpusubtype)));
+                if (architectures_count < 2) { //display fat files with only 2 archs as non-fat
+                    archInfo = nullptr;
                 }
 
                 bool had_aslr_ = remove_aslr(archInfo);
@@ -439,17 +604,35 @@ int main(int argc, const char * argv[], const char * envp[]) {
 
                 fseek(file, current_offset, SEEK_SET);
             }
+
+            if (display_archs_only) {
+                return 0;
+            }
         }
     } else {
+        if (display_archs_only || default_architectures.size()) {
+            if (uses_application) {
+                fprintf(stdout, "Application (%s) is not fat\n", name);
+            } else {
+                fprintf(stdout, "File is not fat\n");
+            }
+
+            return 0;
+        }
+
         fseek(file, 0x0, SEEK_SET);
         fread(&header, sizeof(struct mach_header), 1, file);
 
-        //don't have to set header_offset since it's already 0x0
-        had_aslr = remove_aslr();
+        //don't set header_offset since it's already 0x0
+        remove_aslr();
     }
 
     if (had_aslr) {
-        fprintf(stdout, "Note: %s (%s) may not run til you have signed %s (preferably with ldid)\n", uses_application ? "application" : "file at path", argv[2], uses_application ? "its executable" : "it");
+        if (uses_application) {
+            fprintf(stdout, "Note: Application (%s) may not run til you have signed it's executable (at path %s) (preferably with ldid)\n", name, binary_path);
+        } else {
+            fprintf(stdout, "Note: File may not run til you have signed it (preferably with ldid)\n");
+        }
     }
 
     fclose(file);
