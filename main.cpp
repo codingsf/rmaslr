@@ -6,711 +6,437 @@
 //  Copyright © 2016 iNoahDev. All rights reserved.
 //
 
-#include <CoreFoundation/CoreFoundation.h>
-#include <sys/stat.h>
-
-#include <fcntl.h>
-#include <iostream>
-#include <map>
-#include <stdio.h>
+#include <cstddef>
 #include <string>
-#include <unistd.h>
-#include <vector>
 
-#define assert_(str) std::cout << str << std::endl; return -1
-#define error(str) std::cout << "\x1b[31mError:\x1b[0m " << str << std::endl; return -1
+#include <CoreFoundation/CoreFoundation.h>
+#include <mach-o/loader.h>
+#include <mach-o/fat.h>
+#include <mach-o/arch.h>
+
+#include <sys/stat.h>
+#include <unistd.h>
+
+extern "C" CFArrayRef SBSCopyApplicationDisplayIdentifiers(bool onlyActive, bool debugging);
+extern "C" CFStringRef SBSCopyLocalizedApplicationNameForDisplayIdentifier(CFStringRef bundle_id);
+extern "C" CFStringRef SBSCopyExecutablePathForDisplayIdentifier(CFStringRef bundle_id);
+
+#define assert_(str, ...) fprintf(stderr, "\x1B[31mError:\x1B[0m " str "\n", ##__VA_ARGS__); return -1
+#define error(str, ...) fprintf(stderr, "\x1B[31mError:\x1B[0m " str "\n", ##__VA_ARGS__); exit(0)
 
 #ifdef DEBUG
-#define log(str) std::cout << "DEBUG: " << str << std::endl;
+#define log(str, ...) fprintf(stderr, "[rmaslr] " __FILE__ ":%d DEBUG: " str "\n", __LINE__, ##__VA_ARGS__);
 #else
-#define log(str) 
+#define log(str, ...)
 #endif
 
-#define MH_MAGIC 0xfeedface
-#define MH_CIGAM 0xcefaedfe
+static inline uint32_t swap(uint32_t magic, uint32_t value) {
+    if (magic == MH_CIGAM || magic == MH_CIGAM_64 || magic == FAT_CIGAM || magic == FAT_CIGAM_64) {
+        value = ((value >> 8) & 0x00ff00ff) | ((value << 8) & 0xff00ff00);
+        value = ((value >> 16) & 0x0000ffff) | ((value << 16) & 0xffff0000);
+    }
 
-#define MH_MAGIC_64 0xfeedfacf
-#define MH_CIGAM_64 0xcffaedfe
-
-struct fat_header {
-    uint32_t magic;
-    uint32_t nfat_arch;
-};
-
-#define FAT_MAGIC 0xcafebabe
-#define FAT_CIGAM 0xbebafeca
-
-struct fat_arch {
-    uint32_t cputype;
-    uint32_t cpusubtype;
-    uint32_t offset;
-    uint32_t size;
-    uint32_t align;
-};
-
-struct mach_header {
-    uint32_t magic;
-    uint32_t cputype;
-    uint32_t cpusubtype;
-    uint32_t filetype;
-    uint32_t ncmds;
-    uint32_t sizeofcmds;
-    uint32_t flags;
-};
-
-#define MH_PIE 0x200000
-
-bool swap = false;
-
-static uint32_t Swap_(uint32_t value) {
-    value = ((value >> 8) & 0x00ff00ff) | ((value << 8) & 0xff00ff00);
-    value = ((value >> 16) & 0x0000ffff) | ((value << 16) & 0xffff0000);
-    
     return value;
 }
 
-static inline uint32_t Swap(uint32_t value) {
-    if (swap) {
-        value = Swap_(value);
+static inline uint64_t swap(uint32_t magic, uint64_t value) {
+    if (magic == MH_CIGAM || magic == MH_CIGAM_64 || magic == FAT_CIGAM || magic == FAT_CIGAM_64) {
+        value = (value & 0x00000000ffffffff) << 32 | (value & 0xffffffff00000000) >> 32;
+        value = (value & 0x0000ffff0000ffff) << 16 | (value & 0xffff0000ffff0000) >> 16;
+        value = (value & 0x00ff00ff00ff00ff) << 8  | (value & 0xff00ff00ff00ff00) >> 8;
     }
-    
+
     return value;
-}
-
-static inline uint32_t Swap(uint32_t magic, uint32_t value) {
-    if (magic == MH_CIGAM || magic == MH_CIGAM_64 || magic == FAT_CIGAM) {
-        value = Swap_(value);
-    }
-    
-    return value;
-}
-
-typedef int cpu_type_t;
-
-typedef cpu_type_t cpu_subtype_t;
-typedef cpu_type_t cpu_threadtype_t;
-
-#define CPU_ARCH_ABI64					0x01000000
-
-#define CPU_TYPE_ANY					((cpu_type_t) -1)
-
-#define CPU_TYPE_VAX					((cpu_type_t) 1)
-#define	CPU_TYPE_MC680x0				((cpu_type_t) 6)
-#define CPU_TYPE_X86					((cpu_type_t) 7)
-#define CPU_TYPE_I386					(CPU_TYPE_X86)
-#define	CPU_TYPE_X86_64					(CPU_TYPE_X86 | CPU_ARCH_ABI64)
-
-#define CPU_TYPE_MC98000				((cpu_type_t) 10)
-#define CPU_TYPE_HPPA					((cpu_type_t) 11)
-#define CPU_TYPE_ARM					((cpu_type_t) 12)
-#define CPU_TYPE_ARM64					(CPU_TYPE_ARM | CPU_ARCH_ABI64)
-#define CPU_TYPE_MC88000				((cpu_type_t) 13)
-#define CPU_TYPE_SPARC					((cpu_type_t) 14)
-#define CPU_TYPE_I860					((cpu_type_t) 15)
-
-#define CPU_TYPE_POWERPC				((cpu_type_t) 18)
-#define CPU_TYPE_POWERPC64				(CPU_TYPE_POWERPC | CPU_ARCH_ABI64)
-
-#define CPU_SUBTYPE_MASK				0xff000000
-#define CPU_SUBTYPE_LIB64				0x80000000
-
-#define	CPU_SUBTYPE_MULTIPLE			((cpu_subtype_t) -1)
-#define CPU_SUBTYPE_LITTLE_ENDIAN		((cpu_subtype_t) 0)
-#define CPU_SUBTYPE_BIG_ENDIAN			((cpu_subtype_t) 1)
-
-#define CPU_THREADTYPE_NONE				((cpu_threadtype_t) 0)
-
-#define	CPU_SUBTYPE_VAX_ALL				((cpu_subtype_t) 0)
-#define CPU_SUBTYPE_VAX780				((cpu_subtype_t) 1)
-#define CPU_SUBTYPE_VAX785				((cpu_subtype_t) 2)
-#define CPU_SUBTYPE_VAX750				((cpu_subtype_t) 3)
-#define CPU_SUBTYPE_VAX730				((cpu_subtype_t) 4)
-#define CPU_SUBTYPE_UVAXI				((cpu_subtype_t) 5)
-#define CPU_SUBTYPE_UVAXII				((cpu_subtype_t) 6)
-#define CPU_SUBTYPE_VAX8200				((cpu_subtype_t) 7)
-#define CPU_SUBTYPE_VAX8500				((cpu_subtype_t) 8)
-#define CPU_SUBTYPE_VAX8600				((cpu_subtype_t) 9)
-#define CPU_SUBTYPE_VAX8650				((cpu_subtype_t) 10)
-#define CPU_SUBTYPE_VAX8800				((cpu_subtype_t) 11)
-#define CPU_SUBTYPE_UVAXIII				((cpu_subtype_t) 12)
-
-#define	CPU_SUBTYPE_MC680x0_ALL			((cpu_subtype_t) 1)
-#define CPU_SUBTYPE_MC68030				((cpu_subtype_t) 1)
-#define CPU_SUBTYPE_MC68040				((cpu_subtype_t) 2)
-#define	CPU_SUBTYPE_MC68030_ONLY		((cpu_subtype_t) 3)
-
-#define CPU_SUBTYPE_INTEL(f, m)			((cpu_subtype_t) (f) + ((m) << 4))
-
-#define	CPU_SUBTYPE_I386_ALL			CPU_SUBTYPE_INTEL(3, 0)
-#define CPU_SUBTYPE_386					CPU_SUBTYPE_INTEL(3, 0)
-#define CPU_SUBTYPE_486					CPU_SUBTYPE_INTEL(4, 0)
-#define CPU_SUBTYPE_486SX				CPU_SUBTYPE_INTEL(4, 8)
-#define CPU_SUBTYPE_586					CPU_SUBTYPE_INTEL(5, 0)
-#define CPU_SUBTYPE_PENT				CPU_SUBTYPE_INTEL(5, 0)
-#define CPU_SUBTYPE_PENTPRO				CPU_SUBTYPE_INTEL(6, 1)
-#define CPU_SUBTYPE_PENTII_M3			CPU_SUBTYPE_INTEL(6, 3)
-#define CPU_SUBTYPE_PENTII_M5			CPU_SUBTYPE_INTEL(6, 5)
-#define CPU_SUBTYPE_CELERON				CPU_SUBTYPE_INTEL(7, 6)
-#define CPU_SUBTYPE_CELERON_MOBILE		CPU_SUBTYPE_INTEL(7, 7)
-#define CPU_SUBTYPE_PENTIUM_3			CPU_SUBTYPE_INTEL(8, 0)
-#define CPU_SUBTYPE_PENTIUM_3_M			CPU_SUBTYPE_INTEL(8, 1)
-#define CPU_SUBTYPE_PENTIUM_3_XEON		CPU_SUBTYPE_INTEL(8, 2)
-#define CPU_SUBTYPE_PENTIUM_M			CPU_SUBTYPE_INTEL(9, 0)
-#define CPU_SUBTYPE_PENTIUM_4			CPU_SUBTYPE_INTEL(10, 0)
-#define CPU_SUBTYPE_PENTIUM_4_M			CPU_SUBTYPE_INTEL(10, 1)
-#define CPU_SUBTYPE_ITANIUM				CPU_SUBTYPE_INTEL(11, 0)
-#define CPU_SUBTYPE_ITANIUM_2			CPU_SUBTYPE_INTEL(11, 1)
-#define CPU_SUBTYPE_XEON				CPU_SUBTYPE_INTEL(12, 0)
-#define CPU_SUBTYPE_XEON_MP				CPU_SUBTYPE_INTEL(12, 1)
-
-#define CPU_SUBTYPE_INTEL_FAMILY(x)		((x) & 15)
-#define CPU_SUBTYPE_INTEL_FAMILY_MAX	15
-
-#define CPU_SUBTYPE_INTEL_MODEL(x)		((x) >> 4)
-#define CPU_SUBTYPE_INTEL_MODEL_ALL		0
-
-#define CPU_SUBTYPE_X86_ALL				((cpu_subtype_t)3)
-#define CPU_SUBTYPE_X86_64_ALL			((cpu_subtype_t)3)
-#define CPU_SUBTYPE_X86_ARCH1			((cpu_subtype_t)4)
-#define CPU_SUBTYPE_X86_64_H			((cpu_subtype_t)8)
-
-#define CPU_THREADTYPE_INTEL_HTT		((cpu_threadtype_t) 1)
-
-#define	CPU_SUBTYPE_MIPS_ALL			((cpu_subtype_t) 0)
-#define CPU_SUBTYPE_MIPS_R2300			((cpu_subtype_t) 1)
-#define CPU_SUBTYPE_MIPS_R2600			((cpu_subtype_t) 2)
-#define CPU_SUBTYPE_MIPS_R2800			((cpu_subtype_t) 3)
-#define CPU_SUBTYPE_MIPS_R2000a			((cpu_subtype_t) 4)
-#define CPU_SUBTYPE_MIPS_R2000			((cpu_subtype_t) 5)
-#define CPU_SUBTYPE_MIPS_R3000a			((cpu_subtype_t) 6)
-#define CPU_SUBTYPE_MIPS_R3000			((cpu_subtype_t) 7)
-
-#define	CPU_SUBTYPE_MC98000_ALL			((cpu_subtype_t) 0)
-#define CPU_SUBTYPE_MC98601				((cpu_subtype_t) 1)
-
-#define	CPU_SUBTYPE_HPPA_ALL			((cpu_subtype_t) 0)
-#define CPU_SUBTYPE_HPPA_7100			((cpu_subtype_t) 0)
-#define CPU_SUBTYPE_HPPA_7100LC			((cpu_subtype_t) 1)
-
-#define	CPU_SUBTYPE_MC88000_ALL			((cpu_subtype_t) 0)
-#define CPU_SUBTYPE_MC88100				((cpu_subtype_t) 1)
-#define CPU_SUBTYPE_MC88110				((cpu_subtype_t) 2)
-
-#define	CPU_SUBTYPE_SPARC_ALL			((cpu_subtype_t) 0)
-
-#define CPU_SUBTYPE_I860_ALL			((cpu_subtype_t) 0)
-#define CPU_SUBTYPE_I860_860			((cpu_subtype_t) 1)
-
-#define CPU_SUBTYPE_POWERPC_ALL			((cpu_subtype_t) 0)
-#define CPU_SUBTYPE_POWERPC_601			((cpu_subtype_t) 1)
-#define CPU_SUBTYPE_POWERPC_602			((cpu_subtype_t) 2)
-#define CPU_SUBTYPE_POWERPC_603			((cpu_subtype_t) 3)
-#define CPU_SUBTYPE_POWERPC_603e		((cpu_subtype_t) 4)
-#define CPU_SUBTYPE_POWERPC_603ev		((cpu_subtype_t) 5)
-#define CPU_SUBTYPE_POWERPC_604			((cpu_subtype_t) 6)
-#define CPU_SUBTYPE_POWERPC_604e		((cpu_subtype_t) 7)
-#define CPU_SUBTYPE_POWERPC_620			((cpu_subtype_t) 8)
-#define CPU_SUBTYPE_POWERPC_750			((cpu_subtype_t) 9)
-#define CPU_SUBTYPE_POWERPC_7400		((cpu_subtype_t) 10)
-#define CPU_SUBTYPE_POWERPC_7450		((cpu_subtype_t) 11)
-#define CPU_SUBTYPE_POWERPC_970			((cpu_subtype_t) 100)
-
-#define CPU_SUBTYPE_ARM_ALL				((cpu_subtype_t) 0)
-#define CPU_SUBTYPE_ARM_V4T				((cpu_subtype_t) 5)
-#define CPU_SUBTYPE_ARM_V6				((cpu_subtype_t) 6)
-#define CPU_SUBTYPE_ARM_V5TEJ			((cpu_subtype_t) 7)
-#define CPU_SUBTYPE_ARM_XSCALE			((cpu_subtype_t) 8)
-#define CPU_SUBTYPE_ARM_V7				((cpu_subtype_t) 9)
-#define CPU_SUBTYPE_ARM_V7F				((cpu_subtype_t) 10)
-#define CPU_SUBTYPE_ARM_V7S				((cpu_subtype_t) 11)
-#define CPU_SUBTYPE_ARM_V7K				((cpu_subtype_t) 12)
-#define CPU_SUBTYPE_ARM_V6M				((cpu_subtype_t) 14)
-#define CPU_SUBTYPE_ARM_V7M				((cpu_subtype_t) 15)
-#define CPU_SUBTYPE_ARM_V7EM			((cpu_subtype_t) 16)
-
-#define CPU_SUBTYPE_ARM_V8				((cpu_subtype_t) 13)
-
-#define CPU_SUBTYPE_ARM64_ALL           ((cpu_subtype_t) 0)
-#define CPU_SUBTYPE_ARM64_V8            ((cpu_subtype_t) 1)
-
-typedef struct {
-    const char    *name;
-    cpu_type_t    cputype;
-    cpu_subtype_t cpusubtype;
-    const char    *description;
-} NXArchInfo;
-
-
-static const NXArchInfo ArchInfoTable[] = {
-    { "hppa",		CPU_TYPE_HPPA,		CPU_SUBTYPE_HPPA_ALL,		"HP-PA"},
-    { "i386",		CPU_TYPE_I386,		CPU_SUBTYPE_I386_ALL,		"Intel 80x86"},
-    { "x86_64",		CPU_TYPE_X86_64,	CPU_SUBTYPE_X86_64_ALL,		"Intel x86-64"},
-    { "x86_64h",	CPU_TYPE_X86_64,	CPU_SUBTYPE_X86_64_H,		"Intel x86-64h Haswell"},
-    { "i860",		CPU_TYPE_I860,		CPU_SUBTYPE_I860_ALL,		"Intel 860"},
-    { "m68k",		CPU_TYPE_MC680x0,	CPU_SUBTYPE_MC680x0_ALL,	"Motorola 68K"},
-    { "m88k",		CPU_TYPE_MC88000,	CPU_SUBTYPE_MC88000_ALL,	"Motorola 88K"},
-    { "ppc",		CPU_TYPE_POWERPC,	CPU_SUBTYPE_POWERPC_ALL,	"PowerPC"},
-    { "ppc64",		CPU_TYPE_POWERPC64, CPU_SUBTYPE_POWERPC_ALL,	"PowerPC 64-bit"},
-    { "sparc",		CPU_TYPE_SPARC,		CPU_SUBTYPE_SPARC_ALL,		"SPARC"},
-    { "arm",		CPU_TYPE_ARM,		CPU_SUBTYPE_ARM_ALL,		"ARM"},
-    { "arm64",		CPU_TYPE_ARM64,		CPU_SUBTYPE_ARM64_ALL,		"ARM64"},
-    { "any",		CPU_TYPE_ANY,		CPU_SUBTYPE_MULTIPLE,		"Architecture Independent"},
-    { "hppa7100LC", CPU_TYPE_HPPA,		CPU_SUBTYPE_HPPA_7100LC,	"HP-PA 7100LC"},
-    { "m68030",		CPU_TYPE_MC680x0,	CPU_SUBTYPE_MC68030_ONLY,	"Motorola 68030"},
-    { "m68040",		CPU_TYPE_MC680x0,	CPU_SUBTYPE_MC68040,		"Motorola 68040"},
-    { "i486",		CPU_TYPE_I386,		CPU_SUBTYPE_486,			"Intel 80486"},
-    { "i486SX",		CPU_TYPE_I386,		CPU_SUBTYPE_486SX,			"Intel 80486SX"},
-    { "pentium",	CPU_TYPE_I386,		CPU_SUBTYPE_PENT,			"Intel Pentium"},
-    { "i586",		CPU_TYPE_I386,		CPU_SUBTYPE_586,			"Intel 80586"},
-    { "pentpro",	CPU_TYPE_I386,		CPU_SUBTYPE_PENTPRO,		"Intel Pentium Pro"},
-    { "i686",		CPU_TYPE_I386,		CPU_SUBTYPE_PENTPRO,		"Intel Pentium Pro" },
-    { "pentIIm3",	CPU_TYPE_I386,		CPU_SUBTYPE_PENTII_M3,		"Intel Pentium II Model 3" },
-    { "pentIIm5",	CPU_TYPE_I386,		CPU_SUBTYPE_PENTII_M5,		"Intel Pentium II Model 5" },
-    { "pentium4",	CPU_TYPE_I386,		CPU_SUBTYPE_PENTIUM_4,		"Intel Pentium 4" },
-    { "x86_64h",	CPU_TYPE_I386,		CPU_SUBTYPE_X86_64_H,		"Intel x86-64h Haswell" },
-    { "ppc601",		CPU_TYPE_POWERPC,	CPU_SUBTYPE_POWERPC_601,	"PowerPC 601" },
-    { "ppc603",		CPU_TYPE_POWERPC,	CPU_SUBTYPE_POWERPC_603,	"PowerPC 603" },
-    { "ppc603e",	CPU_TYPE_POWERPC,	CPU_SUBTYPE_POWERPC_603e,	"PowerPC 603e" },
-    { "ppc603ev",	CPU_TYPE_POWERPC,	CPU_SUBTYPE_POWERPC_603ev,  "PowerPC 603ev" },
-    { "ppc604",		CPU_TYPE_POWERPC,	CPU_SUBTYPE_POWERPC_604,	"PowerPC 604" },
-    { "ppc604e",	CPU_TYPE_POWERPC,	CPU_SUBTYPE_POWERPC_604e,	"PowerPC 604e" },
-    { "ppc750",		CPU_TYPE_POWERPC,	CPU_SUBTYPE_POWERPC_750,	"PowerPC 750" },
-    { "ppc7400",	CPU_TYPE_POWERPC,	CPU_SUBTYPE_POWERPC_7400,	"PowerPC 7400" },
-    { "ppc7450",	CPU_TYPE_POWERPC,	CPU_SUBTYPE_POWERPC_7450,	"PowerPC 7450" },
-    { "ppc970",		CPU_TYPE_POWERPC,	CPU_SUBTYPE_POWERPC_970,	"PowerPC 970" },
-    { "ppc970-64",  CPU_TYPE_POWERPC64, CPU_SUBTYPE_POWERPC_970,	"PowerPC 970 64-bit" },
-    { "armv4t",		CPU_TYPE_ARM,		CPU_SUBTYPE_ARM_V4T,		"arm v4t" },
-    { "armv5",		CPU_TYPE_ARM,		CPU_SUBTYPE_ARM_V5TEJ,		"arm v5" },
-    { "xscale",		CPU_TYPE_ARM,		CPU_SUBTYPE_ARM_XSCALE,		"arm xscale" },
-    { "armv6",		CPU_TYPE_ARM,		CPU_SUBTYPE_ARM_V6,			"arm v6" },
-    { "armv6m",		CPU_TYPE_ARM,		CPU_SUBTYPE_ARM_V6M,		"arm v6m" },
-    { "armv7",		CPU_TYPE_ARM,		CPU_SUBTYPE_ARM_V7,			"arm v7" },
-    { "armv7f",		CPU_TYPE_ARM,		CPU_SUBTYPE_ARM_V7F,		"arm v7f" },
-    { "armv7s",		CPU_TYPE_ARM,		CPU_SUBTYPE_ARM_V7S,		"arm v7s" },
-    { "armv7k",		CPU_TYPE_ARM,		CPU_SUBTYPE_ARM_V7K,		"arm v7k" },
-    { "armv7m",		CPU_TYPE_ARM,		CPU_SUBTYPE_ARM_V7M,		"arm v7m" },
-    { "armv7em",	CPU_TYPE_ARM,		CPU_SUBTYPE_ARM_V7EM,		"arm v7em" },
-    { "armv8",		CPU_TYPE_ARM,		CPU_SUBTYPE_ARM_V8,			"arm v8" },
-    { "arm64",		CPU_TYPE_ARM64,		CPU_SUBTYPE_ARM64_V8,		"arm64 v8" },
-    { "little",		CPU_TYPE_ANY,		CPU_SUBTYPE_LITTLE_ENDIAN,  "Little Endian" },
-    { "big",		CPU_TYPE_ANY,		CPU_SUBTYPE_BIG_ENDIAN,		"Big Endian" },
-    { "",			0,					0,							"" }
-};
-
-const NXArchInfo *NXGetArchInfoFromCpuType(cpu_type_t cputype, cpu_subtype_t subtype) {
-    for (int i = 0; i < sizeof(ArchInfoTable); i++) {
-        const NXArchInfo *archInfo = &ArchInfoTable[i];
-        
-        if (cputype == archInfo->cputype && subtype == archInfo->cpusubtype) {
-            return archInfo;
-        }
-    }
-    
-    return &ArchInfoTable[51];
-}
-
-const NXArchInfo *NXGetArchInfoFromFatArch(struct fat_arch *arch) {
-    return NXGetArchInfoFromCpuType(Swap(arch->cputype), Swap(arch->cpusubtype));
-}
-
-extern "C" CFArrayRef SBSCopyApplicationDisplayIdentifiers(bool onlyActive, bool debuggable);
-
-extern "C" CFStringRef SBSCopyExecutablePathForDisplayIdentifier(CFStringRef bundleID);
-extern "C" CFStringRef SBSCopyLocalizedApplicationNameForDisplayIdentifier(CFStringRef bundleID);
-
-std::string CFStringGetSTDString(CFStringRef string) {
-    if (!string) return "";
-    
-    const char *str = CFStringGetCStringPtr(string, kCFStringEncodingUTF8);     
-    if (!str) return "";
-        
-    return std::string(str);   
-}
-
-bool comparestr(const std::string &left, const std::string &right) {
-   for (std::string::const_iterator lit = left.begin(), rit = right.begin(); lit != left.end() && rit != right.end(); ++lit, ++rit) {
-       char lc = std::tolower(*lit);
-       char rc = std::tolower(*rit);
-       
-      if (lc != rc) {
-         return lc < rc;
-      } 
-   }
-   
-   return left.size() < right.size();
-}
-
-void print_installedapps() {
-    CFArrayRef apps = SBSCopyApplicationDisplayIdentifiers(false, false);
-    
-    std::vector<std::string> applications;
-                        
-    for (CFIndex i = 0; i < CFArrayGetCount(apps); i++) {             
-        CFStringRef bundleID = (CFStringRef)CFArrayGetValueAtIndex(apps, i);    
-        std::string name = CFStringGetSTDString(SBSCopyLocalizedApplicationNameForDisplayIdentifier(bundleID));
-        
-        applications.push_back(name);
-    }
-    
-    std::sort(applications.begin(), applications.end(), comparestr); //sort alphabetically
-    
-    unsigned int i = 0;
-    unsigned int size = applications.size();
-    
-    for (std::string application : applications) {
-        if (!application.empty()) {
-            std::cout << application;
-            if (i != size) std::cout << ", ";
-        }
-        
-        i++;
-    }
-    
-    std::cout << std::endl;
-    exit(0);
 }
 
 void print_usage() {
-    std::cout << "Usage: rmaslr [-a/--app/--application]/[-b/--bin/--binary] application/binary [-arch] arch" << std::endl;
-    std::cout << "Options:" << std::endl;
-    
-    std::cout << "    -a,     --app/--application,   Remove ASLR for an application" << std::endl;
-    std::cout << "    -apps,  --applications,        Print a list of installed Applications" << std::endl;
-    std::cout << "    -b,     --binary,              Remove ASLR for a Mach-O Executable" << std::endl;
-    
-    std::cout << "    -?/-h,  --help,                Print this message" << std::endl;
+    fprintf(stdout, "Usage: rmaslr -a application\n");
+    fprintf(stdout, "Options:\n");
+    fprintf(stdout, "    -a,     --app/--application,   Remove ASLR for an application\n");
+    fprintf(stdout, "    -apps,  --applications,        Print a list of Applications\n");
+    fprintf(stdout, "    -b,     --binary,              Remove ASLR for a Mach-O Executable\n");
+    fprintf(stdout, "    -?/-h,  --help,                Print this message\n");
+
     exit(0);
 }
 
-int main(int argc, const char * argv[]) {
+//this can't be a c++ lambda?
+CFComparisonResult in_case_sensitive_compare(const CFStringRef string1, const CFStringRef string2, __attribute__((unused)) void *context) {
+    return CFStringCompare(string1, string2, kCFCompareCaseInsensitive);
+}
+
+int main(int argc, const char * argv[], const char * envp[]) {
     if (argc < 2) {
         print_usage();
-    }
-    
-    bool appFlag = false;
-    bool binFlag = false;
-    
-    const char *arg1 = argv[1];
-    switch (arg1[0]) {
-        case '-': {
-            if (strcasecmp(arg1, "-apps") == 0 || strcasecmp(arg1, "--applications") == 0) {
-                print_installedapps();
-            } else if (strcasecmp(arg1, "-?") == 0 || strcasecmp(arg1, "-h") == 0 || strcasecmp(arg1, "--help") == 0) {
-                print_usage();
-            } if (strcasecmp(arg1, "-a") == 0 || strcasecmp(arg1, "--app") == 0 || strcasecmp(arg1, "--application") == 0) {
-                appFlag = true;
-            } else if (strcasecmp(arg1, "-b") == 0 || strcasecmp(arg1, "--bin") == 0 || strcasecmp(arg1, "--binary") == 0) {
-                binFlag = true;
-            } else {
-                error("Option " << arg1 << " not found");
-            }
-            
-            if (arg1[1] == '\0') {
-                error("Please provide an Option");
-            }
-            
-            break;
-        }
-        
-        default:
-            error("Please provide an Option");
-            break;
-    }
-    
-    FILE *file = NULL;
-    
-    //perform validations
-    if (binFlag) {
-        if (argc < 3) {
-            error("Option " << arg1 << " requires a path to a mach-o executable");
-        }
-        
-        std::string path = argv[2];
-        if (path[0] != '/') {
-            char buf[4096];
-            
-            if (!getcwd(buf, sizeof(buf))) {
-                error("getcwd() did not return a valid path");
-            }
-            
-            size_t length = strlen(buf);
-            
-            if (buf[length - 1] != '/') {
-                buf[length] = '/';
-                buf[length + 1] = '\0'; 
-            }
-            
-            path.insert(0, buf);
-        }
-        
-        if (access(path.c_str(), W_OK) != 0) {
-            if (access(path.c_str(), F_OK) != 0) {
-                error("Invalid Path provided - " << path);
-            } else if (access(path.c_str(), R_OK) != 0) {
-                error("Unable to read file at path, Please change permissions of the file");
-            } else {
-                error("Unable to access write permissions for file at path, Please change permissions of the file");
-            }
-        }
-        
-        struct stat *sbuf = new struct stat;
-        stat(path.c_str(), sbuf);
-        
-        if (S_ISDIR(sbuf->st_mode)) {
-            error("Directories are not supported");
-        } else if (!S_ISREG(sbuf->st_mode)) {
-            error("Only Mach-O Executables are supported");
-        }
-            
-        if (sbuf->st_size < sizeof(struct mach_header)) {
-            error("Size of file is too small");
-        }   
-         
-        file = fopen(path.c_str(), "r+");
-        if (!file) {
-            error("Unable to open file at path, Please change permissions of the file");
-        }
-    } else {
-        if (argc < 3) {
-            assert_("Option " << arg1 << " requires an application name/identifier/executable-name");
-        }
-        
-        std::string app = argv[2]; //accepted options are localized-name, binary-name, bundleID
-        
-        //look for applications
-        bool found = false;
-        CFArrayRef apps = SBSCopyApplicationDisplayIdentifiers(false, false);
-        
-        std::string bundleID;
-        std::string name;
-        std::string bin; //binary name
-        
-        std::string executablepath;
-         
-        for (CFIndex i = 0; i < CFArrayGetCount(apps); i++) {             
-            CFStringRef bundleID_ = (CFStringRef)CFArrayGetValueAtIndex(apps, i);
-            bundleID = CFStringGetSTDString(bundleID_);
-            
-            name = CFStringGetSTDString(SBSCopyLocalizedApplicationNameForDisplayIdentifier(bundleID_));
-            bin = CFStringGetSTDString(SBSCopyExecutablePathForDisplayIdentifier(bundleID_));
-            
-            executablepath = bin; 
-                       
-            std::string::size_type index = bin.find_last_of('/');
-            bin = bin.substr(index + 1);
-            
-            if (strcasecmp(bundleID.c_str(), app.c_str()) == 0 || strcasecmp(name.c_str(), app.c_str()) == 0 || strcasecmp(bin.c_str(), app.c_str()) == 0) {
-                found = true;
-                break;
-            }
-        }
-                
-        if (!found) {
-            error("Application " << app << " was not found. Run -apps/--applications to see a list of applications");
-        }
-        
-        file = fopen(executablepath.c_str(), "r+");
-        if (!file) {
-            error("Unable to open file at path");
-        }
-    }
-    
-    uint32_t magic;
-    
-    fseek(file, 0x0, SEEK_SET);
-    fread(&magic, sizeof(uint32_t), 1, file);
-    
-    bool fat = false;
-    bool bits64 = false;
-    
-    switch (magic) {
-        case MH_MAGIC:
-            break;
-        case MH_CIGAM:
-            swap = true;
-            break;
-        case MH_CIGAM_64:
-            swap = true;
-        case MH_MAGIC_64:
-            bits64 = true;
-            break;
-        case FAT_CIGAM:
-            swap = true;
-        case FAT_MAGIC:
-            fat = true;
-            break;
-        default:
-            error("File at path is not a mach-o executable");
-            break;
-    }
-    
-    if (!fat && argc > 3) {
-        if (strcasecmp(argv[3], "-arch") == 0) {
-            error("File at path does not contain multiple architectures");
-        } else {
-            error("Too many arguments provided");
-        }
-    } else if (fat && argc > 5) {
-        error("Too many arguments provided");
-    }
-    
-    std::map<uint32_t, struct mach_header *> headers;
-    
-    if (fat) {
-        struct fat_header *fat = new struct fat_header;
-        
-        std::vector<struct fat_arch *> archs;
-        std::vector<const NXArchInfo *> archInfos;
-        
-        fseek(file, 0x0, SEEK_SET);
-        fread(fat, sizeof(struct fat_header), 1, file);
-        
-        uint32_t nfat_arch = Swap(fat->nfat_arch);
-        uint32_t off = sizeof(struct fat_header);
-        
-        for (uint32_t i = 0; i < nfat_arch; i++) {
-            struct fat_arch *arch = new struct fat_arch;
-            
-            fseek(file, off, SEEK_SET);
-            fread(arch, sizeof(struct fat_arch), 1, file);
-            
-            archs.push_back(arch);
-            archInfos.push_back(NXGetArchInfoFromFatArch(arch));
-            
-            off += sizeof(struct fat_arch);
-        }
-        
-        std::vector<struct fat_arch *> archs_; //selected architectures
-        
-        if (argc < 5) {
-            std::cout << "Fat Mach-O executable detected\nPlease choose one of the following architectures: [" << archInfos[0]->name;
-            
-            std::vector<const NXArchInfo *> archInfos_ = archInfos;
-            archInfos_.erase(archInfos_.begin());
-            
-            for (const NXArchInfo *archInfo : archInfos_) {
-                std::cout << ", " << archInfo->name;
-            }
-            
-            std::cout << "]\nOr enter \'all\' for all architectures: ";
-            
-            while (true) {
-                std::string arch_;
-                std::cin >> arch_;
-                
-                if (strcasecmp(arch_.c_str(), "all") == 0) {
-                    archs_ = archs;
-                    break;
-                } else {
-                    bool found = false;
-                    
-                    int i = 0;
-                    for (const NXArchInfo *archInfo : archInfos) {
-                        if (strcasecmp(archInfo->name, arch_.c_str()) != 0) {
-                            i++; 
-                            continue;
-                        }
-                        
-                        archs_.push_back(archs[i]);
-                        found = true;
-                        
-                        break;
-                    }
-                 
-                    if (!found) {
-                        std::cout << "Architecture " << arch_ << " not found, Please choose an architecture from the list above";
-                    } else {
-                        break;
-                    }
-                }
-            }
-        } else {
-            if (strcasecmp(argv[3], "-arch") != 0) {
-                error("Flag " << argv[3] << " not recognized, Did you mean -arch?");
-            }
-            
-            std::string arch = argv[4];
-            if (strcasecmp(arch.c_str(), "all") == 0) {
-                archs_ = archs;
-            } else {
-                bool found = false;
-                for (uint32_t i = 0; i < nfat_arch; i++) {
-                    if (strcasecmp(archInfos[i]->name, arch.c_str()) != 0) continue;
-                    
-                    archs_.push_back(archs[i]);
-                    found = true;
-                    
-                    break;
-                }
-                
-                if (!found) {
-                    error("Unable to find Architecture \'" << arch << "\' Please choose an architecture from the list above");
-                }
-            }   
-        }
-        
-        for (struct fat_arch *arch : archs_) {
-            struct mach_header *header = new struct mach_header;
-            uint32_t offset = Swap(arch->offset);
-                        
-            fseek(file, offset, SEEK_SET);
-            fread(header, sizeof(struct mach_header), 1, file);
-            
-            headers.insert(std::pair<uint32_t, struct mach_header *>(offset, header));
-        }
-    } else {
-        if (argc > 3) {
-            if (strcasecmp(argv[3], "-arch") != 0) {
-                error("Too many arguments provided");
-            } else {
-                error("Application does not contain multiple architectures");
-            }
-        }
-        
-        struct mach_header *header = new struct mach_header;
-        
-        fseek(file, 0x0, SEEK_SET);
-        fread(header, sizeof(struct mach_header), 1, file);
-        
-        headers.insert(std::pair<uint32_t, struct mach_header *>(0x0, header));
+    } else if (argc > 3) {
+        assert_("Too many arguments provided");
     }
 
-    for (auto const &it : headers) {
-        uint32_t offset = it.first;
-        struct mach_header *header = it.second;
-                
-        if (!(Swap(header->magic, header->flags) & MH_PIE)) {
-            if (fat) {
-                std::cout << "Architecture " << NXGetArchInfoFromCpuType(Swap(header->magic, header->cputype), Swap(header->magic, header->cpusubtype))->name << " does not contain ASLR" << std::endl;
-            } else {
-                std::cout << "Mach-O Executable does not contain ASLR" << std::endl;
-            }
-            
-            continue;
-        }
-        
-        uint32_t flags = Swap(header->magic, header->flags);
-        flags &= ~MH_PIE;
-        
-        flags = Swap(header->magic, flags);
-        header->flags = flags;
-        
-        fseek(file, offset, SEEK_SET);
-        size_t err = fwrite(header, sizeof(struct mach_header), 1, file);
-        
-        if (err != 1) {
-            if (fat) {
-                error("Failed to write header to Architecture " << NXGetArchInfoFromCpuType(Swap(header->magic, header->cputype), Swap(header->magic, header->cpusubtype))->name);
-            } else {
-                error("Failed to write header to File");
-            }
-        }
-        
-        if (fat) 
-            std::cout << "Removed ASLR! Architecture " << NXGetArchInfoFromCpuType(Swap(header->magic, header->cputype), Swap(header->magic, header->cpusubtype))->name << " no longer contains ASLR" << std::endl;
-        else 
-            std::cout << "Removed ASLR! Mach-O Executable no longer contains ASLR" << std::endl;
+    const char *argument = argv[1];
+    if (argument[0] != '-') {
+        assert_("%s is not an option", argument);
     }
-    
-    return 0;
+
+    const char *option = &argument[1];
+    if (option[0] == '-') {
+        option++;
+    }
+
+    if (strcmp(option, "?") == 0 || strcmp(option, "h") == 0) {
+        print_usage();
+    } else if (strcmp(option, "apps") == 0 || strcmp(option, "-applications") == 0) {
+        CFArrayRef applications = SBSCopyApplicationDisplayIdentifiers(false, false);
+        CFIndex applications_count = CFArrayGetCount(applications);
+
+        CFMutableArrayRef sorted_applications = CFArrayCreateMutable(CFAllocatorGetDefault(), applications_count, nullptr);
+
+        for (CFIndex i = 0; i < CFArrayGetCount(applications); i++) {
+            CFStringRef bundle_id = (CFStringRef)CFArrayGetValueAtIndex(applications, i);
+            CFArrayAppendValue(sorted_applications, SBSCopyLocalizedApplicationNameForDisplayIdentifier(bundle_id));
+        }
+
+        CFArraySortValues(sorted_applications, CFRangeMake(0, applications_count), (CFComparatorFunction)in_case_sensitive_compare, nullptr);
+        fprintf(stdout, "%s", CFStringGetCStringPtr((CFStringRef)CFArrayGetValueAtIndex(sorted_applications, 0), kCFStringEncodingUTF8));
+
+        for (CFIndex i = 1; i < applications_count; i++) {
+            const char *display_name = CFStringGetCStringPtr((CFStringRef)CFArrayGetValueAtIndex(sorted_applications, i), kCFStringEncodingUTF8);
+            if (!display_name) { //why does this happen?
+                continue;
+            }
+
+            fprintf(stdout, ", %s", display_name);
+        }
+
+        fprintf(stdout, "\n");
+
+        return 0;
+    }
+
+    //for fancy debug messages
+    bool uses_application = false;
+    const char *install_path = nullptr;
+
+    if (strcmp(option, "a") == 0 || strcmp(option, "app") == 0 || strcmp(option, "application") == 0) {
+        if (argc < 3) {
+            assert_("Please provide an application display-name/identifier/executable-name");
+        }
+
+        CFStringRef application = CFStringCreateWithCString(CFAllocatorGetDefault(), argv[2], kCFStringEncodingUTF8);
+        CFArrayRef apps = SBSCopyApplicationDisplayIdentifiers(false, false);
+
+        CFStringRef executable_path = nullptr;
+        CFIndex count = CFArrayGetCount(apps);
+
+        for (CFIndex i = 0; i < count; i++) {
+            CFStringRef bundle_id = (CFStringRef)CFArrayGetValueAtIndex(apps, i);
+            CFStringRef display_name = SBSCopyLocalizedApplicationNameForDisplayIdentifier(bundle_id);
+            CFStringRef executable_path_ = SBSCopyExecutablePathForDisplayIdentifier(bundle_id);
+
+            executable_path = executable_path_;
+            if (CFStringCompare(application, bundle_id, 0) == kCFCompareEqualTo) {
+                break;
+            } else if (CFStringCompare(application, display_name, 0) == kCFCompareEqualTo) {
+                break;
+            } else if (CFStringCompare(application, executable_path, 0) == kCFCompareEqualTo) {
+                break;
+            }
+
+            executable_path = nullptr;
+        }
+
+        if (!executable_path) {
+            assert_("Unable to find application %s", argv[2]);
+        }
+
+        uses_application = true;
+        install_path = CFStringGetCStringPtr(executable_path, kCFStringEncodingUTF8);
+
+        if (access(install_path, R_OK) != 0) {
+            const char *application_string = CFStringGetCStringPtr(application, kCFStringEncodingUTF8);
+            if (access(install_path, F_OK) != 0) {
+                assert_("Application (%s)'s executable does not exist", application_string);
+            }
+
+            assert_("Unable to read Application (%s)'s executable", application_string);
+        }
+
+    } else if (strcmp(option, "b") == 0 || strcmp(option, "binary") == 0) {
+        if (argc < 3) {
+            assert_("Please provide a path to a mach-o binary");
+        }
+
+        std::string path = argv[2];
+        if (path[0] != '/') {
+            char *buf = new char[4096];
+            if (!getcwd(buf, 4096)) {
+                assert_("Unable to get the current directory, is the current directory deleted?");
+            }
+
+            //use std::string for safety (so we don't end up writing outside buf, while trying to append a '/')
+            std::string buffer = buf;
+
+            //unable to use back() even though we're on c++14
+            if (*(buffer.end() - 1) != '/') {
+                buffer.append(1, '/');
+            }
+
+            path.insert(0, buffer);
+        }
+
+        install_path = path.c_str();
+        if (access(install_path, R_OK) != 0) {
+            if (access(install_path, F_OK) != 0) {
+                assert_("File at path (%s) does not exist", install_path);
+            }
+
+            assert_("Unable to read file at path (%s)", install_path);
+        }
+    } else {
+        assert_("Unrecognized option %s", argument);
+    }
+
+    if (!install_path) {
+        assert_("Unable to get path");
+    }
+
+    FILE *file = fopen(install_path, "r+");
+    if (!file) {
+        if (uses_application) {
+            assert_("Unable to open application (%s)'s executable", argv[2]);
+        }
+
+        assert_("Unable to open file at path %s", argv[2]);
+    }
+
+    struct stat sbuf;
+    if (stat(install_path, &sbuf) != 0) {
+        if (uses_application) {
+            assert_("Unable to get information on application (%s)'s executable", argv[2]);
+        }
+
+        assert_("Unable to get information on file at path %s", argv[2]);
+    }
+
+    if (sbuf.st_size < sizeof(struct mach_header_64)) {
+        if (uses_application) {
+            assert_("Application (%s)'s executable is not a valid mach-o", argv[2]);
+        }
+
+        assert_("File at path (%s) is not a valid mach-o", argv[2]);
+    }
+
+    uint32_t magic;
+
+    fseek(file, 0x0, SEEK_SET);
+    fread(&magic, sizeof(uint32_t), 1, file);
+
+    bool is_fat = false;
+
+    switch (magic) {
+        case MH_MAGIC:
+        case MH_CIGAM:
+        case MH_MAGIC_64:
+        case MH_CIGAM_64:
+            break;
+        case FAT_MAGIC:
+        case FAT_CIGAM:
+        case FAT_MAGIC_64:
+        case FAT_CIGAM_64:
+            is_fat = true;
+            break;
+        default: {
+            if (uses_application) {
+                assert_("Application (%s)'s executable is not a valid mach-o", argv[2]);
+            }
+
+            assert_("File at path (%s) is not a valid mach-o", argv[2]);
+        }
+    }
+
+    struct mach_header header;
+    long header_offset = 0x0;
+
+    auto remove_aslr = [&file, &argv, &header, &header_offset, &uses_application](const NXArchInfo *archInfo = nullptr) {
+        uint32_t flags = swap(header.magic, header.flags);
+        if (!(flags & MH_PIE)) {
+            if (archInfo) {
+                fprintf(stdout, "Architecture %s does not contain aslr\n", archInfo->name);
+            } else {
+                if (uses_application) {
+                    fprintf(stdout, "Application (%s) does not contain aslr\n", argv[2]);
+                } else {
+                    fprintf(stdout, "File does not contain aslr\n");
+                }
+            }
+
+            return false;
+        }
+
+        //ask user if should remove ASLR for arm64
+        uint32_t cputype = swap(header.magic, static_cast<uint32_t>(header.cputype));
+        if (cputype == CPU_TYPE_ARM64) {
+            bool can_continue = false;
+            bool is_valid = false;
+
+            char *result = new char[2];
+            memset(static_cast<void *>(result), '\0', 2); //zero out the string for safety purposes
+
+            while (!is_valid) {
+                fprintf(stdout, "Removing ASLR on a 64-bit arm %s can result in it crashing. Are you sure you want to continue (y/n): ", (archInfo) ? "file" : "application");
+                scanf("%1s", result);
+
+                can_continue = strcasecmp(result, "y") == 0;
+                is_valid = can_continue || strcasecmp(result, "n") == 0;
+            }
+
+            if (!can_continue) {
+                //even though result should be whether or not file had aslr, return false so that the "sign file" message does not show (because nothing happened)
+                return false;
+            }
+        }
+
+        flags &= ~MH_PIE;
+        header.flags = swap(header.magic, flags);
+
+        fseek(file, header_offset, SEEK_SET);
+        if (fwrite(&header, sizeof(struct mach_header), 1, file) != 1) {
+            error("There was an error writing to file, at-offset %.8lX, errno=%d", header_offset, errno);
+        }
+
+        if (archInfo) {
+            fprintf(stdout, "Removed ASLR for architecture \"%s\"\n", archInfo->name);
+        } else {
+            fprintf(stdout, "Successfully Removed ASLR!\n");
+        }
+
+        return true;
+    };
+
+    bool had_aslr = false;
+
+    if (is_fat) {
+        struct fat_header fat;
+
+        fseek(file, 0x0, SEEK_SET);
+        fread(&fat, sizeof(struct fat_header), 1, file);
+
+        uint32_t architectures_count = swap(magic, fat.nfat_arch);
+        if (!architectures_count) {
+            if (uses_application) {
+                assert_("Application (%s)'s executable cannot have 0 architectures", argv[2]);
+            }
+
+            assert_("File at path (%s) cannot have 0 architectures", argv[2]);
+        }
+
+        if (magic == FAT_MAGIC_64 || magic == FAT_CIGAM_64) {
+            if (architectures_count * sizeof(struct fat_arch_64) > sbuf.st_size) {
+                if (uses_application) {
+                    assert_("Application (%s)'s executable is too small to contain %d architectures", argv[2], architectures_count);
+                }
+
+                assert_("File at path (%s) is too small to contain %d architectures", argv[2], architectures_count);
+            }
+
+            for (uint32_t i = 0; i < architectures_count; i++) {
+                struct fat_arch_64 arch;
+                fread(&arch, sizeof(struct fat_arch_64), 1, file);
+
+                long current_offset = ftell(file);
+                header_offset = static_cast<long>(swap(magic, arch.offset));
+
+                //basic validation
+                if (header_offset < current_offset) {
+                    if (uses_application) {
+                        assert_("Application (%s) executable's architecture #%d is placed before its declaration", argv[2], i + 1);
+                    }
+
+                    assert_("File at path (%s) architecture #%d is placed before its declaration", argv[2], i + 1);
+                }
+
+                if (header_offset > sbuf.st_size) {
+                    if (uses_application) {
+                        assert_("Application (%s) executable's architecture #%d is placed past end of file", argv[2], i + 1);
+                    }
+
+                    assert_("File at path (%s) architecture #%d is placed past end of file", argv[2], i + 1);
+                }
+
+                fseek(file, header_offset, SEEK_SET);
+                fread(&header, sizeof(struct mach_header), 1, file);
+
+                const NXArchInfo *archInfo = nullptr;
+                if (architectures_count > 1) { //display fat files with only 1 arch as non-fat
+                    archInfo = NXGetArchInfoFromCpuType(swap(magic, static_cast<uint32_t>(arch.cputype)), swap(magic, static_cast<uint32_t>(arch.cpusubtype)));
+                }
+
+                bool had_aslr_ = remove_aslr(archInfo);
+                if (!had_aslr) {
+                    had_aslr = had_aslr_;
+                }
+
+                fseek(file, current_offset, SEEK_SET);
+            }
+        } else {
+            if (architectures_count * sizeof(struct fat_arch) > sbuf.st_size) {
+                if (uses_application) {
+                    assert_("Application (%s)'s executable is too small to contain %d architectures", argv[2], architectures_count);
+                }
+
+                assert_("File at path (%s) is too small to contain %d architectures", argv[2], architectures_count);
+            }
+
+            for (uint32_t i = 0; i < architectures_count; i++) {
+                struct fat_arch arch;
+                fread(&arch, sizeof(struct fat_arch), 1, file);
+
+                long current_offset = ftell(file);
+                header_offset = static_cast<long>(swap(magic, arch.offset));
+
+                //basic validation
+                if (header_offset < current_offset) {
+                    if (uses_application) {
+                        assert_("Application (%s) executable's architecture #%d is placed before its declaration", argv[2], i + 1);
+                    }
+
+                    assert_("File at path (%s) architecture #%d is placed before its declaration", argv[2], i + 1);
+                }
+
+                if (header_offset > sbuf.st_size) {
+                    if (uses_application) {
+                        assert_("Application (%s) executable's architecture #%d is placed past end of file", argv[2], i + 1);
+                    }
+
+                    assert_("File at path (%s) architecture #%d is placed past end of file", argv[2], i + 1);
+                }
+
+                fseek(file, header_offset, SEEK_SET);
+                fread(&header, sizeof(struct mach_header), 1, file);
+
+                const NXArchInfo *archInfo = nullptr;
+                if (architectures_count > 1) { //display fat files with only 1 arch as non-fat
+                    archInfo = NXGetArchInfoFromCpuType(swap(magic, static_cast<uint32_t>(arch.cputype)), swap(magic, static_cast<uint32_t>(arch.cpusubtype)));
+                }
+
+                bool had_aslr_ = remove_aslr(archInfo);
+                if (!had_aslr) {
+                    had_aslr = had_aslr_;
+                }
+
+                fseek(file, current_offset, SEEK_SET);
+            }
+        }
+    } else {
+        fseek(file, 0x0, SEEK_SET);
+        fread(&header, sizeof(struct mach_header), 1, file);
+
+        //don't have to set header_offset since it's already 0x0
+        had_aslr = remove_aslr();
+    }
+
+    if (had_aslr) {
+        fprintf(stdout, "Note: %s (%s) may not run til you have signed %s (preferably with ldid)\n", uses_application ? "application" : "file at path", argv[2], uses_application ? "its executable" : "it");
+    }
+
+    fclose(file);
 }

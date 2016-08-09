@@ -1,4 +1,5 @@
 obj/
 .theos/
 debs/
+packages/
 .DS_STORE
