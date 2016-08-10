@@ -6,7 +6,7 @@ rmaslr_FILES = main.cpp
 rmaslr_PRIVATE_FRAMEWORKS = SpringBoardServices
 rmaslr_CFLAGS = -std=c++14
 
+# cannot add line below due to std::string linker errors
 # rmaslr_LDFLAGS = -stdlib=libc++
-# cannot add line above due to std::string linker errors
 
 include $(THEOS_MAKE_PATH)/tool.mk

@@ -2,7 +2,7 @@
 //  main.cpp
 //  rmaslr
 //
-//  Created by Anonymous on 5/10/16.
+//  Created by iNoahDev on 5/10/16.
 //  Copyright © 2016 iNoahDev. All rights reserved.
 //
 
@@ -552,7 +552,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
 
                 const NXArchInfo *archInfo = NXGetArchInfoFromCpuType(swap(magic, static_cast<uint32_t>(arch.cputype)), swap(magic, static_cast<uint32_t>(arch.cpusubtype)));
                 if (!archInfo) {
-                    assert_("Architecture at offset %.16lX is not valid", current_offset);
+                    assert_("Architecture at offset %.8lX is not valid", current_offset);
                 }
 
                 if (display_archs_only) {
