@@ -86,6 +86,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
     if (argc < 2) {
         print_usage();
     }
+    
     //for fancy debug messages
     bool uses_application = false;
     bool display_archs_only = false;
@@ -122,7 +123,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
 
         CFMutableArrayRef sorted_applications = CFArrayCreateMutable(CFAllocatorGetDefault(), applications_count, nullptr);
 
-        for (CFIndex i = 0; i < CFArrayGetCount(applications); i++) {
+        for (CFIndex i = 0; i < applications_count; i++) {
             CFStringRef bundle_id = (CFStringRef)CFArrayGetValueAtIndex(applications, i);
             CFArrayAppendValue(sorted_applications, SBSCopyLocalizedApplicationNameForDisplayIdentifier(bundle_id));
         }
