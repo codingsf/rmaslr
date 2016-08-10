@@ -451,14 +451,6 @@ int main(int argc, const char * argv[], const char * envp[]) {
             assert_("File at path (%s) cannot have 0 architectures", name);
         }
 
-        if (display_archs_only) {
-            if (uses_application) {
-                fprintf(stdout, "Application (%s) contains %d architectures:\n", name, architectures_count);
-            } else {
-                fprintf(stdout, "File contains %d architectures:\n", architectures_count);
-            }
-        }
-
         if (magic == FAT_MAGIC_64 || magic == FAT_CIGAM_64) {
             if (architectures_count * sizeof(struct fat_arch_64) > sbuf.st_size) {
                 if (uses_application) {
@@ -466,6 +458,14 @@ int main(int argc, const char * argv[], const char * envp[]) {
                 }
 
                 assert_("File at path (%s) is too small to contain %d architectures", name, architectures_count);
+            }
+
+            if (display_archs_only) {
+                if (uses_application) {
+                    fprintf(stdout, "Application (%s) contains %d architectures:\n", name, architectures_count);
+                } else {
+                    fprintf(stdout, "File contains %d architectures:\n", architectures_count);
+                }
             }
 
             for (uint32_t i = 0; i < architectures_count; i++) {
@@ -541,6 +541,14 @@ int main(int argc, const char * argv[], const char * envp[]) {
                 }
 
                 assert_("File at path (%s) is too small to contain %d architectures", name, architectures_count);
+            }
+
+            if (display_archs_only) {
+                if (uses_application) {
+                    fprintf(stdout, "Application (%s) contains %d architectures:\n", name, architectures_count);
+                } else {
+                    fprintf(stdout, "File contains %d architectures:\n", architectures_count);
+                }
             }
 
             for (uint32_t i = 0; i < architectures_count; i++) {
