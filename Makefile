@@ -3,6 +3,7 @@ TARGET = iphone:9.2:9.0
 
 TOOL_NAME = rmaslr
 rmaslr_FILES = main.cpp
+rmaslr_FRAMEWORKS = CoreFoundation
 rmaslr_PRIVATE_FRAMEWORKS = SpringBoardServices
 rmaslr_CFLAGS = -std=c++14
 
