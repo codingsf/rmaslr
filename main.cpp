@@ -69,8 +69,8 @@ void print_usage() {
     fprintf(stdout, "Options:\n");
     fprintf(stdout, "    -a,     --app/--application,   Remove ASLR for an application\n");
     fprintf(stdout, "    -apps,  --applications,        Print a list of Applications\n");
-    fprintf(stdout, "    -arch,  --architecture,        Single out an architecture to remove aslr from");
-    fprintf(stdout, "    -archs, --architectures,       Print all possible architectures, and if application/binary is provided, print all architectures present");
+    fprintf(stdout, "    -arch,  --architecture,        Single out an architecture to remove ASLR from\n");
+    fprintf(stdout, "    -archs, --architectures,       Print all possible architectures, and if application/binary is provided, print all architectures present\n");
     fprintf(stdout, "    -b,     --binary,              Remove ASLR for a Mach-O Executable\n");
     fprintf(stdout, "    -?/-h,  --help,                Print this message\n");
 
@@ -86,7 +86,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
     if (argc < 2) {
         print_usage();
     }
-    
+
     //for fancy debug messages
     bool uses_application = false;
     bool display_archs_only = false;

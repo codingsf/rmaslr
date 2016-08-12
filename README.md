@@ -5,6 +5,8 @@ Usage: rmaslr -a application
 Options:
 	-a,     --app/--application,   Remove ASLR for an application
 	-apps,  --applications,        Print a list of Applications
+	-arch,  --architecture,        Single out an architecture to remove ASLR from
+	-archs, --architectures,       Print all possible architectures, and if application/binary is provided, print all architectures present
 	-b,     --binary,              Remove ASLR for a Mach-O Executable
 	-?/-h,  --help,                Print this message
 ```
