@@ -72,7 +72,9 @@ void print_usage() {
     fprintf(stdout, "    -arch,  --architecture,        Single out an architecture to remove ASLR from\n");
     fprintf(stdout, "    -archs, --architectures,       Print all possible architectures, and if application/binary is provided, print all architectures present\n");
     fprintf(stdout, "    -b,     --binary,              Remove ASLR for a Mach-O Executable\n");
-    fprintf(stdout, "    -?/-h,  --help,                Print this message\n");
+    fprintf(stdout, "    -c,     --check,               Check if application or binary contains ASLR\n");
+    fprintf(stdout, "    -h,     --help,                Print this message\n");
+    fprintf(stdout, "    -u,     --usage,               Print this message\n");
 
     exit(0);
 }
@@ -89,7 +91,9 @@ int main(int argc, const char * argv[], const char * envp[]) {
 
     //for fancy debug messages
     bool uses_application = false;
+
     bool display_archs_only = false;
+    bool check_aslr_only = false;
 
     const char *name = nullptr;
     const char *binary_path = nullptr;
@@ -313,6 +317,16 @@ int main(int argc, const char * argv[], const char * envp[]) {
             }
 
             display_archs_only = true;
+        } else if (strcmp(option, "c") == 0 || strcmp(option, "check") == 0) {
+            if (!binary_path) {
+                assert_("Please select an application or binary first");
+            }
+
+            if (display_archs_only) {
+                assert_("Can't display architectures & aslr-status at the same time");
+            }
+
+            check_aslr_only = true;
         } else {
             assert_("Unrecognized option %s", argument);
         }
@@ -379,9 +393,20 @@ int main(int argc, const char * argv[], const char * envp[]) {
     struct mach_header header;
     long header_offset = 0x0;
 
-    auto remove_aslr = [&file, &name, &header, &header_offset, &uses_application](const NXArchInfo *archInfo = nullptr) {
-        uint32_t flags = swap(header.magic, header.flags);
-        if (!(flags & MH_PIE)) {
+    auto has_aslr = [&header](uint32_t *flags = nullptr) {
+        uint32_t flags_ = swap(header.magic, header.flags);
+        if (flags) {
+            *flags = flags_;
+        }
+
+        return (flags_ & MH_PIE) > 0;
+    };
+
+    auto remove_aslr = [&file, &name, &header, &header_offset, &has_aslr, &uses_application](const NXArchInfo *archInfo = nullptr) {
+        uint32_t flags;
+        bool aslr = has_aslr(&flags);
+
+        if (!aslr) {
             if (archInfo) {
                 fprintf(stdout, "Architecture (%s) does not contain ASLR\n", archInfo->name);
             } else {
@@ -402,7 +427,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
             bool is_valid = false;
 
             char *result = new char[2];
-            memset(static_cast<void *>(result), '\0', 2); //zero out the string for safety purposes
+            memset(result, '\0', 2); //zero out the string for safety purposes
 
             while (!is_valid) {
                 fprintf(stdout, "Removing ASLR on a 64-bit arm %s can result in it crashing. Are you sure you want to continue (y/n): ", (archInfo) ? "file" : "application");
@@ -413,7 +438,6 @@ int main(int argc, const char * argv[], const char * envp[]) {
             }
 
             if (!can_continue) {
-                //even though result should be whether or not aslr was removed, return true so that
                 return false;
             }
         }
@@ -522,17 +546,28 @@ int main(int argc, const char * argv[], const char * envp[]) {
                 fseek(file, header_offset, SEEK_SET);
                 fread(&header, sizeof(struct mach_header), 1, file);
 
-                if (architectures_count < 2 && !default_architectures.size()) { //display fat files with less than 2 archs as non-fat
-                    archInfo = nullptr;
-                }
+                if (check_aslr_only) {
+                    bool aslr = has_aslr();
 
-                bool had_aslr_ = remove_aslr(archInfo);
-                if (!had_aslr) {
-                    had_aslr = had_aslr_;
-                }
+                    fprintf(stdout, "Architecture (%s) does%s contain ASLR", archInfo->name, (aslr ? "" : " not"));
+                    if (aslr && header.cputype == CPU_TYPE_ARM64) {
+                        fprintf(stdout, " (Removing ASLR can cause crashes)");
+                    }
 
-                if (it != default_architectures.begin()) {
-                    default_architectures.erase(it);
+                    fprintf(stdout, "\n");
+                } else {
+                    if (architectures_count < 2 && !default_architectures.size()) { //display fat files with less than 2 archs as non-fat
+                        archInfo = nullptr;
+                    }
+
+                    bool had_aslr_ = remove_aslr(archInfo);
+                    if (!had_aslr) {
+                        had_aslr = had_aslr_;
+                    }
+
+                    if (it != default_architectures.begin()) {
+                        default_architectures.erase(it);
+                    }
                 }
 
                 fseek(file, current_offset, SEEK_SET);
@@ -610,17 +645,28 @@ int main(int argc, const char * argv[], const char * envp[]) {
                 fseek(file, header_offset, SEEK_SET);
                 fread(&header, sizeof(struct mach_header), 1, file);
 
-                if (architectures_count < 2 && !default_architectures.size()) { //display fat files with less than 2 archs as non-fat
-                    archInfo = nullptr;
-                }
+                if (check_aslr_only) {
+                    bool aslr = has_aslr();
 
-                bool had_aslr_ = remove_aslr(archInfo);
-                if (!had_aslr) {
-                    had_aslr = had_aslr_;
-                }
+                    fprintf(stdout, "Architecture (%s) does%s contain ASLR", archInfo->name, (aslr ? "" : " not"));
+                    if (aslr && header.cputype == CPU_TYPE_ARM64) {
+                        fprintf(stdout, " (Removing ASLR can cause crashes)");
+                    }
 
-                if (it != default_architectures.begin()) {
-                    default_architectures.erase(it);
+                    fprintf(stdout, "\n");
+                } else {
+                    if (architectures_count < 2 && !default_architectures.size()) { //display fat files with less than 2 archs as non-fat
+                        archInfo = nullptr;
+                    }
+
+                    bool had_aslr_ = remove_aslr(archInfo);
+                    if (!had_aslr) {
+                        had_aslr = had_aslr_;
+                    }
+
+                    if (it != default_architectures.begin()) {
+                        default_architectures.erase(it);
+                    }
                 }
 
                 fseek(file, current_offset, SEEK_SET);
@@ -643,6 +689,14 @@ int main(int argc, const char * argv[], const char * envp[]) {
 
         fseek(file, 0x0, SEEK_SET);
         fread(&header, sizeof(struct mach_header), 1, file);
+
+        if (check_aslr_only) {
+            if (uses_application) {
+                fprintf(stdout, "Application (%s) does%s contain ASLR\n", name, (has_aslr() ? "" : " not"));
+            } else {
+                fprintf(stdout, "File does%s contain ASLR\n", (has_aslr() ? "" : " not"));
+            }
+        }
 
         //don't set header_offset since it's already 0x0
         remove_aslr();
