@@ -255,9 +255,21 @@ int main(int argc, const char * argv[], const char * envp[]) {
             std::string path = argv[i];
 
             if (path[0] != '/') {
-                char *buf = new char[4096];
-                if (!getcwd(buf, 4096)) {
-                    assert_("Unable to get the current directory, is the current directory deleted?");
+                size_t size = 4096;
+                char *buf = new char[size];
+
+                char *result = getcwd(buf, size);
+                if (!result) {
+                    if (errno == ERANGE) {
+                        do {
+                            size += 8;
+
+                            buf = new char[size];
+                            result = getcwd(buf, size);
+                        } while (!result && errno == ERANGE);
+                    } else {
+                        assert_("Unable to get the current working directory, errno=%d (%s)", errno, strerror(errno));
+                    }
                 }
 
                 //use std::string for safety (so we don't end up writing outside buf, while trying to append a '/')
