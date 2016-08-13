@@ -696,6 +696,8 @@ int main(int argc, const char * argv[], const char * envp[]) {
             } else {
                 fprintf(stdout, "File does%s contain ASLR\n", (has_aslr() ? "" : " not"));
             }
+
+            return 0;
         }
 
         //don't set header_offset since it's already 0x0
