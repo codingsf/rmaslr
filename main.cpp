@@ -288,6 +288,14 @@ int main(int argc, const char * argv[], const char * envp[]) {
                 assert_("Please select an application or binary first");
             }
 
+            if (display_archs_only) {
+                assert_("Cannot print architectures and choose an architecture from which to remove ASLR from at the same time");
+            }
+
+            if (check_aslr_only) {
+                assert_("Cannot check aslr status and select an architecture from which to remove ASLR from at the same time");
+            }
+
             int j = ++i;
 
             for (; j < argc; j++) {
@@ -312,8 +320,16 @@ int main(int argc, const char * argv[], const char * envp[]) {
                 assert_("Please select an application or binary first");
             }
 
+            if (check_aslr_only) {
+                assert_("Cannot both display architectures and display aslr-status");
+            }
+
             if (default_architectures.size()) {
                 assert_("Cannot both display and select an arch to remove ASLR from");
+            }
+
+            if (display_archs_only) {
+                assert_("rmaslr is already configured to print architectures");
             }
 
             display_archs_only = true;
@@ -324,6 +340,10 @@ int main(int argc, const char * argv[], const char * envp[]) {
 
             if (display_archs_only) {
                 assert_("Can't display architectures & aslr-status at the same time");
+            }
+
+            if (check_aslr_only) {
+                assert_("rmaslr is already configured to check for aslr");
             }
 
             check_aslr_only = true;
