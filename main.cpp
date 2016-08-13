@@ -710,7 +710,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
         }
     }
 
-    if (default_architectures.size() != 0) {
+    if (default_architectures.size()) {
         std::string architectures = default_architectures.front()->name;
 
         if (default_architectures.size() > 1) {
@@ -723,7 +723,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
             }
         }
 
-        assert_("Was unable to find & remove ASLR from architecture(s) \"%s\"", architectures.c_str());
+        assert_("Unable to find & remove ASLR from architecture(s) \"%s\"", architectures.c_str());
     }
 
     fclose(file);

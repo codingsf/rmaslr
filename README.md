@@ -8,5 +8,7 @@ Options:
 	-arch,  --architecture,        Single out an architecture to remove ASLR from
 	-archs, --architectures,       Print all possible architectures, and if application/binary is provided, print all architectures present
 	-b,     --binary,              Remove ASLR for a Mach-O Executable
-	-?/-h,  --help,                Print this message
+	-c,     --check,               Check if application or binary contains ASLR
+    -h,     --help,                Print this message
+    -u,     --usage,               Print this message
 ```
