@@ -383,12 +383,12 @@ int main(int argc, const char * argv[], const char * envp[]) {
         uint32_t flags = swap(header.magic, header.flags);
         if (!(flags & MH_PIE)) {
             if (archInfo) {
-                fprintf(stdout, "Architecture %s does not contain aslr\n", archInfo->name);
+                fprintf(stdout, "Architecture (%s) does not contain ASLR\n", archInfo->name);
             } else {
                 if (uses_application) {
-                    fprintf(stdout, "Application (%s) does not contain aslr\n", name);
+                    fprintf(stdout, "Application (%s) does not contain ASLR\n", name);
                 } else {
-                    fprintf(stdout, "File does not contain aslr\n");
+                    fprintf(stdout, "File does not contain ASLR\n");
                 }
             }
 
@@ -486,17 +486,20 @@ int main(int argc, const char * argv[], const char * envp[]) {
                     continue;
                 }
 
+                //can't use auto here :/
                 auto it = default_architectures.begin();
-                for (; it != default_architectures.end(); it++) {
-                    if (*it != archInfo) {
-                        continue;
+                if (default_architectures.size()) {
+                    for (; it != default_architectures.end(); it++) {
+                        if (*it != archInfo) {
+                            continue;
+                        }
+
+                        break;
                     }
 
-                    break;
-                }
-
-                if (it == default_architectures.end()) {
-                    continue;
+                    if (it == default_architectures.end()) {
+                        continue;
+                    }
                 }
 
                 //basic validation
@@ -519,7 +522,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
                 fseek(file, header_offset, SEEK_SET);
                 fread(&header, sizeof(struct mach_header), 1, file);
 
-                if (architectures_count < 2) { //display fat files with less than 2 archs as non-fat
+                if (architectures_count < 2 && !default_architectures.size()) { //display fat files with less than 2 archs as non-fat
                     archInfo = nullptr;
                 }
 
@@ -528,7 +531,10 @@ int main(int argc, const char * argv[], const char * envp[]) {
                     had_aslr = had_aslr_;
                 }
 
-                default_architectures.erase(it);
+                if (it != default_architectures.begin()) {
+                    default_architectures.erase(it);
+                }
+
                 fseek(file, current_offset, SEEK_SET);
             }
 
@@ -570,16 +576,18 @@ int main(int argc, const char * argv[], const char * envp[]) {
                 }
 
                 auto it = default_architectures.begin();
-                for (; it != default_architectures.end(); it++) {
-                    if (*it != archInfo) {
-                        continue;
+                if (default_architectures.size()) {
+                    for (; it != default_architectures.end(); it++) {
+                        if (*it != archInfo) {
+                            continue;
+                        }
+
+                        break;
                     }
 
-                    break;
-                }
-
-                if (it == default_architectures.end()) {
-                    continue;
+                    if (it == default_architectures.end()) {
+                        continue;
+                    }
                 }
 
                 //basic validation
@@ -602,7 +610,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
                 fseek(file, header_offset, SEEK_SET);
                 fread(&header, sizeof(struct mach_header), 1, file);
 
-                if (architectures_count < 2) { //display fat files with only 2 archs as non-fat
+                if (architectures_count < 2 && !default_architectures.size()) { //display fat files with less than 2 archs as non-fat
                     archInfo = nullptr;
                 }
 
@@ -611,7 +619,10 @@ int main(int argc, const char * argv[], const char * envp[]) {
                     had_aslr = had_aslr_;
                 }
 
-                default_architectures.erase(it);
+                if (it != default_architectures.begin()) {
+                    default_architectures.erase(it);
+                }
+
                 fseek(file, current_offset, SEEK_SET);
             }
 
