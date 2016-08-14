@@ -370,11 +370,12 @@ int main(int argc, const char * argv[], const char * envp[]) {
 
     FILE *file = fopen(binary_path, "r+");
     if (!file) {
+        bool is_root = geteuid() == 0;
         if (uses_application) {
-            assert_("Unable to open application (%s)'s executable", name);
+            assert_("Unable to open application (%s)'s executable%s", name, (is_root) ? "" : ". Trying running rmaslr as root");
         }
 
-        assert_("Unable to open file at path %s", name);
+        assert_("Unable to open file at path %s%s", name,(is_root) ? "" : ". Trying running rmaslr as root");
     }
 
     struct stat sbuf;
