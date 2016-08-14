@@ -551,9 +551,9 @@ int main(int argc, const char * argv[], const char * envp[]) {
                 }
 
                 //can't use auto here :/
-                auto it = default_architectures.begin();
+                auto it = default_architectures.end();
                 if (default_architectures.size()) {
-                    for (; it != default_architectures.end(); it++) {
+                    for (it = default_architectures.begin(); it != default_architectures.end(); it++) {
                         if (*it != archInfo) {
                             continue;
                         }
@@ -605,7 +605,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
                         had_aslr = had_aslr_;
                     }
 
-                    if (it != default_architectures.begin()) {
+                    if (it != default_architectures.end()) {
                         default_architectures.erase(it);
                     }
                 }
@@ -650,9 +650,9 @@ int main(int argc, const char * argv[], const char * envp[]) {
                     continue;
                 }
 
-                auto it = default_architectures.begin();
+                auto it = default_architectures.end();
                 if (default_architectures.size()) {
-                    for (; it != default_architectures.end(); it++) {
+                    for (it = default_architectures.begin(); it != default_architectures.end(); it++) {
                         if (*it != archInfo) {
                             continue;
                         }
@@ -704,7 +704,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
                         had_aslr = had_aslr_;
                     }
 
-                    if (it != default_architectures.begin()) {
+                    if (it != default_architectures.end()) {
                         default_architectures.erase(it);
                     }
                 }
