@@ -564,6 +564,10 @@ int main(int argc, const char * argv[], const char * envp[]) {
                     if (it == default_architectures.end()) {
                         continue;
                     }
+                } else if (default_architectures_original_size != 0) {
+                    //make sure not remove aslr when default_architectures has a size less than architecture count in file,
+                    //as count would reach 0, and might remove aslr from a non-confirmed architecture
+                    continue;
                 }
 
                 //basic validation
@@ -663,6 +667,10 @@ int main(int argc, const char * argv[], const char * envp[]) {
                     if (it == default_architectures.end()) {
                         continue;
                     }
+                } else if (default_architectures_original_size != 0) {
+                    //make sure not remove aslr when default_architectures has a size less than architecture count in file,
+                    //as count would reach 0, and might remove aslr from a non-confirmed architecture
+                    continue;
                 }
 
                 //basic validation
@@ -746,7 +754,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
 
     if (had_aslr) {
         if (uses_application) {
-            fprintf(stdout, "\x1B[33mNote:\x1B[0m Application (%s) may not run til you have signed it's executable (at path %s) (preferably with ldid)\n", name, binary_path);
+            fprintf(stdout, "\x1B[33mNote:\x1B[0m Application (%s) may not run til you have signed its executable (at path %s) (preferably with ldid)\n", name, binary_path);
         } else {
             fprintf(stdout, "\x1B[33mNote:\x1B[0m File may not run til you have signed it (preferably with ldid)\n");
         }
