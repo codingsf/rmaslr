@@ -111,7 +111,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
         option++;
     }
 
-    if (strcmp(option, "?") == 0 || strcmp(option, "h") == 0) {
+    if (strcmp(option, "h") == 0 || strcmp(option, "help") == 0 || strcmp(option, "u") == 0 || strcmp(option, "usage") == 0) {
         if (argc > 2) {
             assert_("Please run %s seperately", argument);
         }
