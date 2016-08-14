@@ -149,7 +149,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
 
         fprintf(stdout, "\n");
         return 0;
-    } else if (strcmp(option, "archs") == 0 || strcmp(option, "archs") == 0) {
+    } else if (strcmp(option, "archs") == 0) {
         if (argc > 2) {
             assert_("Please run %s seperately", argument);
         }
