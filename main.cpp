@@ -123,8 +123,11 @@ int main(int argc, const char * argv[], const char * envp[]) {
         }
 
         CFArrayRef applications = SBSCopyApplicationDisplayIdentifiers(false, false);
-        CFIndex applications_count = CFArrayGetCount(applications);
+        if (!applications) {
+            assert_("Unable to retrieve application-list");
+        }
 
+        CFIndex applications_count = CFArrayGetCount(applications);
         CFMutableArrayRef sorted_applications = CFArrayCreateMutable(CFAllocatorGetDefault(), applications_count, nullptr);
 
         for (CFIndex i = 0; i < applications_count; i++) {
@@ -194,6 +197,10 @@ int main(int argc, const char * argv[], const char * envp[]) {
 
             CFStringRef application = CFStringCreateWithCString(CFAllocatorGetDefault(), name, kCFStringEncodingUTF8);
             CFArrayRef apps = SBSCopyApplicationDisplayIdentifiers(false, false);
+
+            if (!apps) {
+                assert_("Unable to retrieve application-list");
+            }
 
             CFStringRef executable_path = nullptr;
             CFIndex count = CFArrayGetCount(apps);
