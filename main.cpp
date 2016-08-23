@@ -144,9 +144,11 @@ int main(int argc, const char * argv[], const char * envp[]) {
             CFArrayAppendValue(sorted_applications, SBSCopyLocalizedApplicationNameForDisplayIdentifier(bundle_id));
         }
 
-        CFArraySortValues(sorted_applications, CFRangeMake(0, applications_count), (CFComparatorFunction)in_case_sensitive_compare, nullptr);
-        fprintf(stdout, "%s", CFStringGetCStringPtr((CFStringRef)CFArrayGetValueAtIndex(sorted_applications, 0), kCFStringEncodingUTF8));
+        CFArraySortValues(sorted_applications, CFRangeMake(0, applications_count), [](const void *string1, const void *string2, void *context) {
+            return CFStringCompare((CFStringRef)string1, (CFStringRef)string2, kCFCompareCaseInsensitive);
+        }, nullptr);
 
+        fprintf(stdout, "%s", CFStringGetCStringPtr((CFStringRef)CFArrayGetValueAtIndex(sorted_applications, 0), kCFStringEncodingUTF8));
         for (CFIndex i = 1; i < applications_count; i++) {
             const char *display_name = CFStringGetCStringPtr((CFStringRef)CFArrayGetValueAtIndex(sorted_applications, i), kCFStringEncodingUTF8);
             if (!display_name) { //why does this happen?
