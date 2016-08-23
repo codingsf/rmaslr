@@ -7,6 +7,7 @@
 //
 
 #include <cstddef>
+#include <iostream>
 #include <string>
 #include <vector>
 
@@ -45,7 +46,7 @@ struct fat_arch_64 {
 #define log(str, ...)
 #endif
 
-static inline uint32_t swap(uint32_t magic, uint32_t value) {
+static uint32_t swap(uint32_t magic, uint32_t value) noexcept {
     if (magic == MH_CIGAM || magic == MH_CIGAM_64 || magic == FAT_CIGAM || magic == FAT_CIGAM_64) {
         value = ((value >> 8) & 0x00ff00ff) | ((value << 8) & 0xff00ff00);
         value = ((value >> 16) & 0x0000ffff) | ((value << 16) & 0xffff0000);
@@ -54,7 +55,7 @@ static inline uint32_t swap(uint32_t magic, uint32_t value) {
     return value;
 }
 
-static inline uint64_t swap(uint32_t magic, uint64_t value) {
+static uint64_t swap(uint32_t magic, uint64_t value) noexcept {
     if (magic == MH_CIGAM || magic == MH_CIGAM_64 || magic == FAT_CIGAM || magic == FAT_CIGAM_64) {
         value = (value & 0x00000000ffffffff) << 32 | (value & 0xffffffff00000000) >> 32;
         value = (value & 0x0000ffff0000ffff) << 16 | (value & 0xffff0000ffff0000) >> 16;
@@ -62,6 +63,14 @@ static inline uint64_t swap(uint32_t magic, uint64_t value) {
     }
 
     return value;
+}
+
+static inline int32_t swap(uint32_t magic, int32_t value) noexcept {
+    return static_cast<int32_t>(swap(magic, static_cast<uint32_t>(value)));
+}
+
+__attribute__((unused)) static inline int64_t swap(uint32_t magic, int64_t value) {
+    return static_cast<int64_t>(swap(magic, static_cast<uint64_t>(value)));
 }
 
 void print_usage() {
@@ -272,6 +281,10 @@ int main(int argc, const char * argv[], const char * envp[]) {
                             size += 8;
 
                             buf = new char[size];
+                            if (!buf) {
+                                assert_("Unable to allocate buffer (size=%ld) to get current working directory", size);
+                            }
+
                             result = getcwd(buf, size);
                         } while (!result && errno == ERANGE);
                     } else {
@@ -344,11 +357,11 @@ int main(int argc, const char * argv[], const char * envp[]) {
             }
 
             if (default_architectures.size()) {
-                assert_("Cannot both display and select an arch to remove ASLR from");
+                assert_("Cannot both display architectures and select an arch to remove ASLR from");
             }
 
             if (display_archs_only) {
-                assert_("rmaslr is already configured to print architectures");
+                assert_("rmaslr is already configured to only print architectures");
             }
 
             display_archs_only = true;
@@ -461,20 +474,20 @@ int main(int argc, const char * argv[], const char * envp[]) {
         }
 
         //ask user if should remove ASLR for arm64
-        uint32_t cputype = swap(header.magic, static_cast<uint32_t>(header.cputype));
+        int32_t cputype = swap(header.magic, header.cputype);
         if (cputype == CPU_TYPE_ARM64) {
             bool can_continue = false;
             bool is_valid = false;
 
-            char *result = new char[2];
-            memset(result, '\0', 2); //zero out the string for safety purposes
+            //use std::string and std::cin for safety instead of a risky char* and scanf()
+            std::string result;
 
             while (!is_valid) {
                 fprintf(stdout, "Removing ASLR on a 64-bit arm %s can result in it crashing. Are you sure you want to continue (y/n): ", (archInfo) ? "file" : "application");
-                scanf("%1s", result);
+                std::cin >> result;
 
-                can_continue = strcasecmp(result, "y") == 0;
-                is_valid = can_continue || strcasecmp(result, "n") == 0;
+                can_continue = result == "y" || result == "Y";
+                is_valid = can_continue || (result == "n" || result == "N");
             }
 
             if (!can_continue) {
@@ -487,7 +500,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
 
         fseek(file, header_offset, SEEK_SET);
         if (fwrite(&header, sizeof(struct mach_header), 1, file) != 1) {
-            error("There was an error writing to file, at-offset %.8lX, errno=%d", header_offset, errno);
+            error("There was an error writing to file, at-offset %.8lX, errno=%d (%s)", header_offset, errno, strerror(errno));
         }
 
         if (archInfo) {
@@ -533,14 +546,15 @@ int main(int argc, const char * argv[], const char * envp[]) {
                 }
             }
 
+            long current_offset = ftell(file);
             for (uint32_t i = 0; i < architectures_count; i++) {
                 struct fat_arch_64 arch;
                 fread(&arch, sizeof(struct fat_arch_64), 1, file);
 
-                long current_offset = ftell(file);
+                current_offset += sizeof(struct fat_arch_64);
                 header_offset = static_cast<long>(swap(magic, arch.offset));
 
-                const NXArchInfo *archInfo = NXGetArchInfoFromCpuType(swap(magic, static_cast<uint32_t>(arch.cputype)), swap(magic, static_cast<uint32_t>(arch.cpusubtype)));
+                const NXArchInfo *archInfo = NXGetArchInfoFromCpuType(swap(magic, arch.cputype), swap(magic, arch.cpusubtype));
                 if (!archInfo) {
                     assert_("Architecture at offset %.16lX is not valid", current_offset);
                 }
@@ -550,7 +564,6 @@ int main(int argc, const char * argv[], const char * envp[]) {
                     continue;
                 }
 
-                //can't use auto here :/
                 auto it = default_architectures.end();
                 if (default_architectures.size()) {
                     for (it = default_architectures.begin(); it != default_architectures.end(); it++) {
@@ -561,11 +574,12 @@ int main(int argc, const char * argv[], const char * envp[]) {
                         break;
                     }
 
+                    //make sure that the architecture was actually found
                     if (it == default_architectures.end()) {
                         continue;
                     }
                 } else if (default_architectures_original_size != 0) {
-                    //make sure not remove aslr when default_architectures has a size less than architecture count in file,
+                    //make sure not to remove aslr when default_architectures has a size less than architecture count in file,
                     //as count would reach 0, and might remove aslr from a non-confirmed architecture
                     continue;
                 }
@@ -594,7 +608,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
                     bool aslr = has_aslr();
 
                     fprintf(stdout, "Architecture (%s) does%s contain ASLR", archInfo->name, (aslr ? "" : " not"));
-                    if (aslr && header.cputype == CPU_TYPE_ARM64) {
+                    if (aslr && swap(header.magic, header.cputype) == CPU_TYPE_ARM64) {
                         fprintf(stdout, " (Removing ASLR can cause crashes)");
                     }
 
@@ -637,14 +651,15 @@ int main(int argc, const char * argv[], const char * envp[]) {
                 }
             }
 
+            long current_offset = ftell(file);
             for (uint32_t i = 0; i < architectures_count; i++) {
                 struct fat_arch arch;
                 fread(&arch, sizeof(struct fat_arch), 1, file);
 
-                long current_offset = ftell(file);
+                current_offset += sizeof(struct fat_arch);
                 header_offset = static_cast<long>(swap(magic, arch.offset));
 
-                const NXArchInfo *archInfo = NXGetArchInfoFromCpuType(swap(magic, static_cast<uint32_t>(arch.cputype)), swap(magic, static_cast<uint32_t>(arch.cpusubtype)));
+                const NXArchInfo *archInfo = NXGetArchInfoFromCpuType(swap(magic, arch.cputype), swap(magic, arch.cpusubtype));
                 if (!archInfo) {
                     assert_("Architecture at offset %.8lX is not valid", current_offset);
                 }
@@ -668,7 +683,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
                         continue;
                     }
                 } else if (default_architectures_original_size != 0) {
-                    //make sure not remove aslr when default_architectures has a size less than architecture count in file,
+                    //make sure not to remove aslr when default_architectures has a size less than architecture count in file,
                     //as count would reach 0, and might remove aslr from a non-confirmed architecture
                     continue;
                 }
@@ -697,7 +712,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
                     bool aslr = has_aslr();
 
                     fprintf(stdout, "Architecture (%s) does%s contain ASLR", archInfo->name, (aslr ? "" : " not"));
-                    if (aslr && header.cputype == CPU_TYPE_ARM64) {
+                    if (aslr && swap(header.magic, header.cputype) == CPU_TYPE_ARM64) {
                         fprintf(stdout, " (Removing ASLR can cause crashes)");
                     }
 
@@ -740,9 +755,9 @@ int main(int argc, const char * argv[], const char * envp[]) {
 
         if (check_aslr_only) {
             if (uses_application) {
-                fprintf(stdout, "Application (%s) does%s contain ASLR\n", name, (has_aslr() ? "" : " not"));
+                fprintf(stdout, "Application (%s) %s ASLR\n", name, (has_aslr() ? "contains" : "does not contain"));
             } else {
-                fprintf(stdout, "File does%s contain ASLR\n", (has_aslr() ? "" : " not"));
+                fprintf(stdout, "File %s ASLR\n", (has_aslr() ? "contains" : "does not contain"));
             }
 
             return 0;
@@ -761,19 +776,29 @@ int main(int argc, const char * argv[], const char * envp[]) {
     }
 
     if (default_architectures.size()) {
-        std::string architectures = default_architectures.front()->name;
+        const NXArchInfo * archInfo = default_architectures.front();
+        char const * architectures = archInfo->name;
 
         if (default_architectures.size() > 1) {
-            architectures.append(", ");
+            //only create std::string on demand to allow easy appending of string
+
+            //show the first element, and then add comma
+            //then add the rest via for loop, this makes sure
+            //there isn't an extra comma
+            std::string architectures_ = architectures;
+            architectures_.append(", ");
+
             default_architectures.erase(default_architectures.begin());
 
             for (const auto& archInfo : default_architectures) {
-                architectures.append(", ");
-                architectures.append(archInfo->name);
+                architectures_.append(", ");
+                architectures_.append(archInfo->name);
             }
+
+            architectures = architectures_.c_str();
         }
 
-        assert_("Unable to find & remove ASLR from architecture(s) \"%s\"", architectures.c_str());
+        assert_("Unable to find & remove ASLR from architecture(s) \"%s\"", architectures);
     }
 
     fclose(file);
