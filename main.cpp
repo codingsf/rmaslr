@@ -218,33 +218,33 @@ int main(int argc, const char * argv[], const char * envp[]) {
             i++;
             name = argv[i];
 
-            CFStringRef application = CFStringCreateWithCString(kCFAllocatorDefault, name, kCFStringEncodingUTF8);
             CFArrayRef apps = SBSCopyApplicationDisplayIdentifiers(false, false);
-
             if (!apps) {
                 assert_("Unable to retrieve application-list");
             }
 
-            CFStringRef executable_path = nullptr;
+            const char *application = nullptr;
+            const char *executable_path = nullptr;
+
             CFIndex count = CFArrayGetCount(apps);
 
             for (CFIndex i = 0; i < count; i++) {
                 CFStringRef bundle_id = (CFStringRef)CFArrayGetValueAtIndex(apps, i);
-                CFStringRef display_name = SBSCopyLocalizedApplicationNameForDisplayIdentifier(bundle_id);
-                CFStringRef executable_path_ = SBSCopyExecutablePathForDisplayIdentifier(bundle_id);
+                
+                char const * display_name = CFStringGetCStringPtr(SBSCopyLocalizedApplicationNameForDisplayIdentifier(bundle_id), kCFStringEncodingUTF8);
+                char const * executable_path_ = CFStringGetCStringPtr(SBSCopyExecutablePathForDisplayIdentifier(bundle_id), kCFStringEncodingUTF8);
+                char const * bundle_id_ = CFStringGetCStringPtr(bundle_id, kCFStringEncodingUTF8);
 
                 executable_path = executable_path_;
 
-                if (CFStringCompare(application, bundle_id, 0) == kCFCompareEqualTo) {
+                if (strcmp(name, bundle_id_) == 0) {
                     break;
-                } else if (CFStringCompare(application, display_name, 0) == kCFCompareEqualTo) {
+                } else if (strcmp(name, display_name) == 0) {
                     break;
                 }
 
-                char const * _executable_path_ = CFStringGetCStringPtr(executable_path_, kCFStringEncodingUTF8);
-                int index = find_last_of(_executable_path_, '/');
-
-                if (strcmp(&_executable_path_[index], CFStringGetCStringPtr(application, kCFStringEncodingUTF8)) != 0) {
+                int index = find_last_of(executable_path_, '/');
+                if (strcmp(&executable_path_[index], name) != 0) {
                     continue;
                 }
 
@@ -256,15 +256,14 @@ int main(int argc, const char * argv[], const char * envp[]) {
             }
 
             uses_application = true;
-            binary_path = CFStringGetCStringPtr(executable_path, kCFStringEncodingUTF8);
+            binary_path = executable_path;
 
             if (access(binary_path, R_OK) != 0) {
-                const char *application_string = CFStringGetCStringPtr(application, kCFStringEncodingUTF8);
                 if (access(binary_path, F_OK) != 0) {
-                    assert_("Application (%s)'s executable does not exist", application_string);
+                    assert_("Application (%s)'s executable does not exist", application);
                 }
 
-                assert_("Unable to read Application (%s)'s executable", application_string);
+                assert_("Unable to read Application (%s)'s executable", application);
             }
         } else if (strcmp(option, "b") == 0 || strcmp(option, "binary") == 0) {
             if (last_argument) {
