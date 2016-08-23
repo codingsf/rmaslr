@@ -180,6 +180,23 @@ int main(int argc, const char * argv[], const char * envp[]) {
         return 0;
     }
 
+    auto find_last_of = [](const char *string, char delimiter) {
+        int index = 0;
+        if (string[index] != delimiter) {
+            char const *result = string;
+            char const *result_ = nullptr;
+
+            do {
+                result_ = result;
+                result_++;
+            } while ((result = strchr(result_, delimiter)));
+
+            index = (uintptr_t)result_ - (uintptr_t)string;
+        }
+
+        return index;
+    };
+
     for (int i = 1; i < argc; i++) {
         argument = argv[i];
         if (argument[0] != '-') {
@@ -210,23 +227,6 @@ int main(int argc, const char * argv[], const char * envp[]) {
 
             CFStringRef executable_path = nullptr;
             CFIndex count = CFArrayGetCount(apps);
-
-            auto find_last_of = [](const char *string, char delimiter) {
-                int index = 0;
-                if (string[index] != delimiter) {
-                    char const *result = string;
-                    char const *result_ = nullptr;
-
-                    do {
-                        result_ = result;
-                        result_++;
-                    } while ((result = strchr(result_, delimiter)));
-
-                    index = (uintptr_t)result_ - (uintptr_t)string;
-                }
-
-                return index;
-            };
 
             for (CFIndex i = 0; i < count; i++) {
                 CFStringRef bundle_id = (CFStringRef)CFArrayGetValueAtIndex(apps, i);
