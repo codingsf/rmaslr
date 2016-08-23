@@ -214,8 +214,6 @@ int main(int argc, const char * argv[], const char * envp[]) {
             CFStringRef executable_path = nullptr;
             CFIndex count = CFArrayGetCount(apps);
 
-            CFStringRef slash = CFStringCreateWithCString(CFAllocatorGetDefault(), "/", kCFStringEncodingUTF8);
-
             for (CFIndex i = 0; i < count; i++) {
                 CFStringRef bundle_id = (CFStringRef)CFArrayGetValueAtIndex(apps, i);
                 CFStringRef display_name = SBSCopyLocalizedApplicationNameForDisplayIdentifier(bundle_id);
@@ -230,21 +228,26 @@ int main(int argc, const char * argv[], const char * envp[]) {
                 }
 
                 //compare backwards to find last '/'
-                CFIndex executable_path_length = CFStringGetLength(executable_path_);
+                char const * _executable_path_ = CFStringGetCStringPtr(executable_path_, kCFStringEncodingUTF8);
 
-                CFRange range = CFRangeMake(0, executable_path_length);
-                if (!CFStringFindWithOptions(executable_path_, slash, CFRangeMake(0, executable_path_length), kCFCompareBackwards, &range)) {
+                //find last of '/'
+                int index = 0;
+                if (_executable_path_[index] != '/') {
+                    char const *result = _executable_path_;
+                    char const *result_ = nullptr;
+
+                    do {
+                        result_ = result;
+                    } while ((result = strchr(result, '/')));
+
+                    index = (uintptr_t)result_ - (uintptr_t)_executable_path_;
+                }
+
+                if (strcmp(&_executable_path_[index], CFStringGetCStringPtr(application, kCFStringEncodingUTF8)) != 0) {
                     continue;
                 }
 
-                CFIndex location = executable_path_length - range.location;
-                CFStringRef executable_name = CFStringCreateWithSubstring(CFAllocatorGetDefault(), executable_path_, CFRangeMake(location, executable_path_length - location));
-
-                if (CFStringCompare(application, executable_name, 0) == kCFCompareEqualTo) {
-                    break;
-                }
-
-                executable_path = nullptr;
+                executable_path = executable_path_;
             }
 
             if (!executable_path) {
