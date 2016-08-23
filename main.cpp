@@ -137,7 +137,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
         }
 
         CFIndex applications_count = CFArrayGetCount(applications);
-        CFMutableArrayRef sorted_applications = CFArrayCreateMutable(CFAllocatorGetDefault(), applications_count, nullptr);
+        CFMutableArrayRef sorted_applications = CFArrayCreateMutable(kCFAllocatorDefault, applications_count, nullptr);
 
         for (CFIndex i = 0; i < applications_count; i++) {
             CFStringRef bundle_id = (CFStringRef)CFArrayGetValueAtIndex(applications, i);
@@ -204,7 +204,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
             i++;
             name = argv[i];
 
-            CFStringRef application = CFStringCreateWithCString(CFAllocatorGetDefault(), name, kCFStringEncodingUTF8);
+            CFStringRef application = CFStringCreateWithCString(kCFAllocatorDefault, name, kCFStringEncodingUTF8);
             CFArrayRef apps = SBSCopyApplicationDisplayIdentifiers(false, false);
 
             if (!apps) {
