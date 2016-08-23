@@ -88,11 +88,6 @@ void print_usage() {
     exit(0);
 }
 
-//this can't be a c++ lambda?
-CFComparisonResult in_case_sensitive_compare(const CFStringRef string1, const CFStringRef string2, __attribute__((unused)) void *context) {
-    return CFStringCompare(string1, string2, kCFCompareCaseInsensitive);
-}
-
 int main(int argc, const char * argv[], const char * envp[]) {
     if (argc < 2) {
         print_usage();
