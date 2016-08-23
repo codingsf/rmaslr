@@ -211,6 +211,23 @@ int main(int argc, const char * argv[], const char * envp[]) {
             CFStringRef executable_path = nullptr;
             CFIndex count = CFArrayGetCount(apps);
 
+            auto find_last_of = [](const char *string, char delimiter) {
+                int index = 0;
+                if (string[index] != delimiter) {
+                    char const *result = string;
+                    char const *result_ = nullptr;
+
+                    do {
+                        result_ = result;
+                        result_++;
+                    } while ((result = strchr(result_, delimiter)));
+
+                    index = (uintptr_t)result_ - (uintptr_t)string;
+                }
+
+                return index;
+            };
+
             for (CFIndex i = 0; i < count; i++) {
                 CFStringRef bundle_id = (CFStringRef)CFArrayGetValueAtIndex(apps, i);
                 CFStringRef display_name = SBSCopyLocalizedApplicationNameForDisplayIdentifier(bundle_id);
@@ -224,21 +241,8 @@ int main(int argc, const char * argv[], const char * envp[]) {
                     break;
                 }
 
-                //compare backwards to find last '/'
                 char const * _executable_path_ = CFStringGetCStringPtr(executable_path_, kCFStringEncodingUTF8);
-
-                //find last of '/'
-                int index = 0;
-                if (_executable_path_[index] != '/') {
-                    char const *result = _executable_path_;
-                    char const *result_ = nullptr;
-
-                    do {
-                        result_ = result;
-                    } while ((result = strchr(result, '/')));
-
-                    index = (uintptr_t)result_ - (uintptr_t)_executable_path_;
-                }
+                int index = find_last_of(_executable_path_, '/');
 
                 if (strcmp(&_executable_path_[index], CFStringGetCStringPtr(application, kCFStringEncodingUTF8)) != 0) {
                     continue;
