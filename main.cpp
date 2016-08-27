@@ -218,9 +218,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
                 assert_("Unable to retrieve application-list");
             }
 
-            const char *application = nullptr;
             const char *executable_path = nullptr;
-
             CFIndex count = CFArrayGetCount(apps);
 
             for (CFIndex i = 0; i < count; i++) {
@@ -264,10 +262,10 @@ int main(int argc, const char * argv[], const char * envp[]) {
 
             if (access(binary_path, R_OK) != 0) {
                 if (access(binary_path, F_OK) != 0) {
-                    assert_("Application (%s)'s executable does not exist", application);
+                    assert_("Application (%s)'s executable does not exist", name);
                 }
 
-                assert_("Unable to read Application (%s)'s executable", application);
+                assert_("Unable to read Application (%s)'s executable", name);
             }
         } else if (strcmp(option, "b") == 0 || strcmp(option, "binary") == 0) {
             if (last_argument) {
@@ -519,6 +517,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
         return true;
     };
 
+    std::vector<const NXArchInfo *> architectures;
     bool had_aslr = false;
 
     if (is_fat) {
@@ -545,14 +544,6 @@ int main(int argc, const char * argv[], const char * envp[]) {
                 assert_("File at path (%s) is too small to contain %d architectures", name, architectures_count);
             }
 
-            if (display_archs_only) {
-                if (uses_application) {
-                    fprintf(stdout, "Application (%s) contains %d architectures:\n", name, architectures_count);
-                } else {
-                    fprintf(stdout, "File contains %d architectures:\n", architectures_count);
-                }
-            }
-
             long current_offset = ftell(file);
             for (uint32_t i = 0; i < architectures_count; i++) {
                 struct fat_arch_64 arch;
@@ -567,7 +558,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
                 }
 
                 if (display_archs_only) {
-                    fprintf(stdout, "%s\n", archInfo->name);
+                    architectures.push_back(archInfo);
                     continue;
                 }
 
@@ -614,7 +605,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
                 if (check_aslr_only) {
                     bool aslr = has_aslr();
 
-                    fprintf(stdout, "Architecture (%s) does%s contain ASLR", archInfo->name, (aslr ? "" : " not"));
+                    fprintf(stdout, "Architecture (%s) %s ASLR", archInfo->name, (aslr ? "contains" : "does not contain"));
                     if (aslr && swap(header.magic, header.cputype) == CPU_TYPE_ARM64) {
                         fprintf(stdout, " (Removing ASLR can cause crashes)");
                     }
@@ -626,7 +617,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
                     }
 
                     bool had_aslr_ = remove_aslr(archInfo);
-                    if (!had_aslr) {
+                    if (!had_aslr && had_aslr_) {
                         had_aslr = had_aslr_;
                     }
 
@@ -650,14 +641,6 @@ int main(int argc, const char * argv[], const char * envp[]) {
                 assert_("File at path (%s) is too small to contain %d architectures", name, architectures_count);
             }
 
-            if (display_archs_only) {
-                if (uses_application) {
-                    fprintf(stdout, "Application (%s) contains %d architectures:\n", name, architectures_count);
-                } else {
-                    fprintf(stdout, "File contains %d architectures:\n", architectures_count);
-                }
-            }
-
             long current_offset = ftell(file);
             for (uint32_t i = 0; i < architectures_count; i++) {
                 struct fat_arch arch;
@@ -672,7 +655,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
                 }
 
                 if (display_archs_only) {
-                    fprintf(stdout, "%s\n", archInfo->name);
+                    architectures.push_back(archInfo);
                     continue;
                 }
 
@@ -718,7 +701,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
                 if (check_aslr_only) {
                     bool aslr = has_aslr();
 
-                    fprintf(stdout, "Architecture (%s) does%s contain ASLR", archInfo->name, (aslr ? "" : " not"));
+                    fprintf(stdout, "Architecture (%s) %s ASLR", archInfo->name, (aslr ? "contains" : "does not contain"));
                     if (aslr && swap(header.magic, header.cputype) == CPU_TYPE_ARM64) {
                         fprintf(stdout, " (Removing ASLR can cause crashes)");
                     }
@@ -730,7 +713,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
                     }
 
                     bool had_aslr_ = remove_aslr(archInfo);
-                    if (!had_aslr) {
+                    if (!had_aslr && had_aslr_) {
                         had_aslr = had_aslr_;
                     }
 
@@ -747,7 +730,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
             }
         }
     } else {
-        if (display_archs_only || default_architectures.size()) {
+        if (default_architectures.size()) {
             if (uses_application) {
                 fprintf(stdout, "Application (%s) is not fat\n", name);
             } else {
@@ -772,6 +755,31 @@ int main(int argc, const char * argv[], const char * envp[]) {
 
         //don't set header_offset since it's already 0x0
         remove_aslr();
+    }
+
+    if (display_archs_only) {
+        auto size = architectures.size();
+        if (size) {
+            if (display_archs_only) {
+                if (uses_application) {
+                    fprintf(stdout, "Application (%s) contains %ld architectures:\n", name, size);
+                } else {
+                    fprintf(stdout, "File contains %ld architectures:\n", size);
+                }
+            }
+
+            for (const NXArchInfo *archInfo : architectures) {
+                fprintf(stdout, "%s\n", archInfo->name);
+            }
+        } else {
+            if (uses_application) {
+                assert_("Application (%s) is not fat\n", name);
+            } else {
+                assert_("File is not fat");
+            }
+        }
+
+        return 0;
     }
 
     if (had_aslr) {
