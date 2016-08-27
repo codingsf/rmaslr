@@ -251,6 +251,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
                     continue;
                 }
 
+                name = display_name;
                 executable_path = executable_path_;
             }
 
@@ -470,9 +471,9 @@ int main(int argc, const char * argv[], const char * envp[]) {
                 fprintf(stdout, "Architecture (%s) does not contain ASLR\n", archInfo->name);
             } else {
                 if (uses_application) {
-                    fprintf(stdout, "Application (%s) does not contain ASLR\n", name);
+                    error("Application (%s) does not contain ASLR", name);
                 } else {
-                    fprintf(stdout, "File does not contain ASLR\n");
+                    error("File does not contain ASLR");
                 }
             }
 
