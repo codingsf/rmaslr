@@ -752,12 +752,10 @@ int main(int argc, const char * argv[], const char * envp[]) {
     if (display_archs_only) {
         auto size = architectures.size();
         if (size) {
-            if (display_archs_only) {
-                if (uses_application) {
-                    fprintf(stdout, "Application (%s) contains %ld architectures:\n", name, size);
-                } else {
-                    fprintf(stdout, "File contains %ld architectures:\n", size);
-                }
+            if (uses_application) {
+                fprintf(stdout, "Application (%s) contains %ld architectures:\n", name, size);
+            } else {
+                fprintf(stdout, "File contains %ld architectures:\n", size);
             }
 
             for (const NXArchInfo *archInfo : architectures) {
