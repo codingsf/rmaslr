@@ -180,21 +180,16 @@ int main(int argc, const char * argv[], const char * envp[]) {
         return 0;
     }
 
-    auto find_last_of = [](const char *string, char delimiter) {
-        int index = 0;
-        if (string[index] != delimiter) {
-            char const *result = string;
-            char const *result_ = nullptr;
+    auto find_last_component = [](const char *string) {
+        char const *result = string;
+        char const *result_ = nullptr;
 
-            do {
-                result_ = result;
-                result_++;
-            } while ((result = strchr(result_, delimiter)));
+        do {
+            result_ = result;
+            result_++;
+        } while ((result = strchr(result_, '/')));
 
-            index = (uintptr_t)result_ - (uintptr_t)string;
-        }
-
-        return index;
+        return &string[(uintptr_t)result_ - (uintptr_t)string];
     };
 
     for (int i = 1; i < argc; i++) {
@@ -230,10 +225,18 @@ int main(int argc, const char * argv[], const char * envp[]) {
 
             for (CFIndex i = 0; i < count; i++) {
                 CFStringRef bundle_id = (CFStringRef)CFArrayGetValueAtIndex(apps, i);
-                
+                if (!bundle_id) {
+                    continue;
+                }
+
                 char const * display_name = CFStringGetCStringPtr(SBSCopyLocalizedApplicationNameForDisplayIdentifier(bundle_id), kCFStringEncodingUTF8);
                 char const * executable_path_ = CFStringGetCStringPtr(SBSCopyExecutablePathForDisplayIdentifier(bundle_id), kCFStringEncodingUTF8);
                 char const * bundle_id_ = CFStringGetCStringPtr(bundle_id, kCFStringEncodingUTF8);
+
+                //apparently "iTunesU" has a null display name?
+                if (!display_name || !executable_path_ || !bundle_id_) {
+                    continue;
+                }
 
                 executable_path = executable_path_;
 
@@ -243,8 +246,8 @@ int main(int argc, const char * argv[], const char * envp[]) {
                     break;
                 }
 
-                int index = find_last_of(executable_path_, '/');
-                if (strcmp(&executable_path_[index], name) != 0) {
+                char const * executable_name = find_last_component(executable_path_);
+                if (strcmp(executable_name, name) != 0) {
                     continue;
                 }
 
