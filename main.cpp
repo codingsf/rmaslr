@@ -765,7 +765,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
             }
         } else {
             if (uses_application) {
-                assert_("Application (%s) is not fat\n", name);
+                assert_("Application (%s) is not fat", name);
             } else {
                 assert_("File is not fat");
             }
