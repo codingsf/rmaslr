@@ -628,10 +628,6 @@ int main(int argc, const char * argv[], const char * envp[]) {
 
                 fseek(file, current_offset, SEEK_SET);
             }
-
-            if (display_archs_only) {
-                return 0;
-            }
         } else {
             if (architectures_count * sizeof(struct fat_arch) > sbuf.st_size) {
                 if (uses_application) {
@@ -723,10 +719,6 @@ int main(int argc, const char * argv[], const char * envp[]) {
                 }
 
                 fseek(file, current_offset, SEEK_SET);
-            }
-
-            if (display_archs_only) {
-                return 0;
             }
         }
     } else {
