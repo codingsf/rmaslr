@@ -491,7 +491,12 @@ int main(int argc, const char * argv[], const char * envp[]) {
             std::string result;
 
             while (!is_valid) {
-                fprintf(stdout, "Removing ASLR on a 64-bit arm %s can result in it crashing. Are you sure you want to continue (y/n): ", (archInfo) ? "file" : "application");
+                if (uses_application) {
+                    fprintf(stdout, "Removing ASLR on a 64-bit arm application (%s) can result in it crashing. Are you sure you want to continue (y/n): ", name);
+                } else {
+                    fprintf(stdout, "Removing ASLR on a 64-bit arm file (%s)  can result in it crashing. Are you sure you want to continue (y/n): ", name);
+                }
+
                 std::cin >> result;
 
                 can_continue = result == "y" || result == "Y";
@@ -785,6 +790,11 @@ int main(int argc, const char * argv[], const char * envp[]) {
         bool removed_aslr_ = remove_aslr(offset, header, archInfo);
         if (!removed_aslr && removed_aslr_) {
             removed_aslr = removed_aslr_;
+        }
+
+        auto iter = std::find(default_architectures.begin(), default_architectures.end(), archInfo);
+        if (iter != default_architectures.end()) {
+            default_architectures.erase(iter);
         }
     }
 
