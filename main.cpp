@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <iostream>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -24,6 +25,8 @@ extern "C" CFStringRef SBSCopyLocalizedApplicationNameForDisplayIdentifier(CFStr
 extern "C" CFStringRef SBSCopyExecutablePathForDisplayIdentifier(CFStringRef bundle_id);
 
 #define assert_(str, ...) fprintf(stderr, "\x1B[31mError:\x1B[0m " str "\n", ##__VA_ARGS__); return -1
+
+#define notice(str, ...) fprintf(stdout, "\x1B[33mNotice:\x1B[0m " str "\n", ##__VA_ARGS__);
 #define error(str, ...) fprintf(stderr, "\x1B[31mError:\x1B[0m " str "\n", ##__VA_ARGS__); exit(0)
 
 //compatibility with linter-clang and older headers
@@ -273,7 +276,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
             }
 
             i++;
-            std::string path = argv[i];
+            const char *path = argv[i];
 
             if (path[0] != '/') {
                 size_t size = 4096;
@@ -287,7 +290,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
 
                             buf = new char[size];
                             if (!buf) {
-                                assert_("Unable to allocate buffer (size=%ld) to get current working directory", size);
+                                assert_("Unable to allocate buffer (size=%ld) to get current working directory, errno=%d (%s)", size, errno, strerror(errno));
                             }
 
                             result = getcwd(buf, size);
@@ -305,10 +308,11 @@ int main(int argc, const char * argv[], const char * envp[]) {
                     buffer.append(1, '/');
                 }
 
-                path.insert(0, buffer);
+                buffer.append(path);
+                path = buffer.c_str();
             }
 
-            binary_path = path.c_str();
+            binary_path = path;
             if (access(binary_path, R_OK) != 0) {
                 if (access(binary_path, F_OK) != 0) {
                     assert_("File at path (%s) does not exist", binary_path);
@@ -316,6 +320,8 @@ int main(int argc, const char * argv[], const char * envp[]) {
 
                 assert_("Unable to read file at path (%s)", binary_path);
             }
+
+            name = find_last_component(path);
         } else if (strcmp(option, "arch") == 0 || strcmp(option, "architecture") == 0) {
             if (last_argument) {
                 assert_("Please provide an architecture name");
@@ -400,7 +406,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
             assert_("Unable to open application (%s)'s executable%s", name, (is_root) ? "" : ". Trying running rmaslr as root");
         }
 
-        assert_("Unable to open file at path %s%s", name,(is_root) ? "" : ". Trying running rmaslr as root");
+        assert_("Unable to open file at path %s%s", name, (is_root) ? "" : ". Trying running rmaslr as root");
     }
 
     struct stat sbuf;
@@ -417,7 +423,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
             assert_("Application (%s)'s executable is not a valid mach-o", name);
         }
 
-        assert_("File at path (%s) is not a valid mach-o", name);
+        assert_("File (%s) is not a valid mach-o", name);
     }
 
     uint32_t magic;
@@ -444,14 +450,11 @@ int main(int argc, const char * argv[], const char * envp[]) {
                 assert_("Application (%s)'s executable is not a valid mach-o", name);
             }
 
-            assert_("File at path (%s) is not a valid mach-o", name);
+            assert_("File (%s) is not a valid mach-o", name);
         }
     }
 
-    struct mach_header header;
-    long header_offset = 0x0;
-
-    auto has_aslr = [&header](uint32_t *flags = nullptr) {
+    auto has_aslr = [](struct mach_header header, uint32_t *flags = nullptr) {
         uint32_t flags_ = swap(header.magic, header.flags);
         if (flags) {
             *flags = flags_;
@@ -460,9 +463,9 @@ int main(int argc, const char * argv[], const char * envp[]) {
         return (flags_ & MH_PIE) > 0;
     };
 
-    auto remove_aslr = [&file, &name, &header, &header_offset, &has_aslr, &uses_application](const NXArchInfo *archInfo = nullptr) {
+    auto remove_aslr = [&file, &name, &has_aslr, &uses_application](long offset, struct mach_header header, const NXArchInfo *archInfo = nullptr) {
         uint32_t flags;
-        bool aslr = has_aslr(&flags);
+        bool aslr = has_aslr(header, &flags);
 
         if (!aslr) {
             if (archInfo) {
@@ -471,7 +474,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
                 if (uses_application) {
                     error("Application (%s) does not contain ASLR", name);
                 } else {
-                    error("File does not contain ASLR");
+                    error("File (%s) does not contain ASLR", name);
                 }
             }
 
@@ -503,9 +506,9 @@ int main(int argc, const char * argv[], const char * envp[]) {
         flags &= ~MH_PIE;
         header.flags = swap(header.magic, flags);
 
-        fseek(file, header_offset, SEEK_SET);
+        fseek(file, offset, SEEK_SET);
         if (fwrite(&header, sizeof(struct mach_header), 1, file) != 1) {
-            error("There was an error writing to file, at-offset %.8lX, errno=%d (%s)", header_offset, errno, strerror(errno));
+            error("There was an error writing to file, at-offset %.8lX, errno=%d (%s)", offset, errno, strerror(errno));
         }
 
         if (archInfo) {
@@ -518,7 +521,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
     };
 
     std::vector<const NXArchInfo *> architectures;
-    bool had_aslr = false;
+    std::map<long, struct mach_header> headers;
 
     if (is_fat) {
         struct fat_header fat;
@@ -532,7 +535,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
                 assert_("Application (%s)'s executable cannot have 0 architectures", name);
             }
 
-            assert_("File at path (%s) cannot have 0 architectures", name);
+            assert_("File (%s) cannot have 0 architectures", name);
         }
 
         if (magic == FAT_MAGIC_64 || magic == FAT_CIGAM_64) {
@@ -541,7 +544,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
                     assert_("Application (%s)'s executable is too small to contain %d architectures", name, architectures_count);
                 }
 
-                assert_("File at path (%s) is too small to contain %d architectures", name, architectures_count);
+                assert_("File (%s) is too small to contain %d architectures", name, architectures_count);
             }
 
             long current_offset = ftell(file);
@@ -550,7 +553,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
                 fread(&arch, sizeof(struct fat_arch_64), 1, file);
 
                 current_offset += sizeof(struct fat_arch_64);
-                header_offset = static_cast<long>(swap(magic, arch.offset));
+                long header_offset = static_cast<long>(swap(magic, arch.offset));
 
                 const NXArchInfo *archInfo = NXGetArchInfoFromCpuType(swap(magic, arch.cputype), swap(magic, arch.cpusubtype));
                 if (!archInfo) {
@@ -588,7 +591,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
                         assert_("Application (%s) executable's architecture #%d is placed before its declaration", name, i + 1);
                     }
 
-                    assert_("File at path (%s) architecture #%d is placed before its declaration", name, i + 1);
+                    assert_("File (%s) architecture #%d is placed before its declaration", name, i + 1);
                 }
 
                 if (header_offset > sbuf.st_size) {
@@ -596,36 +599,15 @@ int main(int argc, const char * argv[], const char * envp[]) {
                         assert_("Application (%s) executable's architecture #%d is placed past end of file", name, i + 1);
                     }
 
-                    assert_("File at path (%s) architecture #%d is placed past end of file", name, i + 1);
+                    assert_("File (%s) architecture #%d is placed past end of file", name, i + 1);
                 }
+
+                struct mach_header header;
 
                 fseek(file, header_offset, SEEK_SET);
                 fread(&header, sizeof(struct mach_header), 1, file);
 
-                if (check_aslr_only) {
-                    bool aslr = has_aslr();
-
-                    fprintf(stdout, "Architecture (%s) %s ASLR", archInfo->name, (aslr ? "contains" : "does not contain"));
-                    if (aslr && swap(header.magic, header.cputype) == CPU_TYPE_ARM64) {
-                        fprintf(stdout, " (Removing ASLR can cause crashes)");
-                    }
-
-                    fprintf(stdout, "\n");
-                } else {
-                    if (architectures_count < 2 && !default_architectures.size()) { //display fat files with less than 2 archs as non-fat
-                        archInfo = nullptr;
-                    }
-
-                    bool had_aslr_ = remove_aslr(archInfo);
-                    if (!had_aslr && had_aslr_) {
-                        had_aslr = had_aslr_;
-                    }
-
-                    if (it != default_architectures.end()) {
-                        default_architectures.erase(it);
-                    }
-                }
-
+                headers.insert(std::pair<long, struct mach_header>(header_offset, header));
                 fseek(file, current_offset, SEEK_SET);
             }
         } else {
@@ -634,7 +616,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
                     assert_("Application (%s)'s executable is too small to contain %d architectures", name, architectures_count);
                 }
 
-                assert_("File at path (%s) is too small to contain %d architectures", name, architectures_count);
+                assert_("File (%s) is too small to contain %d architectures", name, architectures_count);
             }
 
             long current_offset = ftell(file);
@@ -643,7 +625,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
                 fread(&arch, sizeof(struct fat_arch), 1, file);
 
                 current_offset += sizeof(struct fat_arch);
-                header_offset = static_cast<long>(swap(magic, arch.offset));
+                long header_offset = static_cast<long>(swap(magic, arch.offset));
 
                 const NXArchInfo *archInfo = NXGetArchInfoFromCpuType(swap(magic, arch.cputype), swap(magic, arch.cpusubtype));
                 if (!archInfo) {
@@ -665,6 +647,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
                         break;
                     }
 
+                    //make sure that the architecture was actually found
                     if (it == default_architectures.end()) {
                         continue;
                     }
@@ -680,7 +663,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
                         assert_("Application (%s) executable's architecture #%d is placed before its declaration", name, i + 1);
                     }
 
-                    assert_("File at path (%s) architecture #%d is placed before its declaration", name, i + 1);
+                    assert_("File (%s) architecture #%d is placed before its declaration", name, i + 1);
                 }
 
                 if (header_offset > sbuf.st_size) {
@@ -688,65 +671,54 @@ int main(int argc, const char * argv[], const char * envp[]) {
                         assert_("Application (%s) executable's architecture #%d is placed past end of file", name, i + 1);
                     }
 
-                    assert_("File at path (%s) architecture #%d is placed past end of file", name, i + 1);
+                    assert_("File (%s) architecture #%d is placed past end of file", name, i + 1);
                 }
+
+                struct mach_header header;
 
                 fseek(file, header_offset, SEEK_SET);
                 fread(&header, sizeof(struct mach_header), 1, file);
 
-                if (check_aslr_only) {
-                    bool aslr = has_aslr();
-
-                    fprintf(stdout, "Architecture (%s) %s ASLR", archInfo->name, (aslr ? "contains" : "does not contain"));
-                    if (aslr && swap(header.magic, header.cputype) == CPU_TYPE_ARM64) {
-                        fprintf(stdout, " (Removing ASLR can cause crashes)");
-                    }
-
-                    fprintf(stdout, "\n");
-                } else {
-                    if (architectures_count < 2 && !default_architectures.size()) { //display fat files with less than 2 archs as non-fat
-                        archInfo = nullptr;
-                    }
-
-                    bool had_aslr_ = remove_aslr(archInfo);
-                    if (!had_aslr && had_aslr_) {
-                        had_aslr = had_aslr_;
-                    }
-
-                    if (it != default_architectures.end()) {
-                        default_architectures.erase(it);
-                    }
-                }
-
+                headers.insert(std::pair<long, struct mach_header>(header_offset, header));
                 fseek(file, current_offset, SEEK_SET);
             }
         }
     } else {
-        if (default_architectures.size()) {
-            if (uses_application) {
-                fprintf(stdout, "Application (%s) is not fat\n", name);
-            } else {
-                fprintf(stdout, "File is not fat\n");
-            }
-
-            return 0;
-        }
+        struct mach_header header;
 
         fseek(file, 0x0, SEEK_SET);
         fread(&header, sizeof(struct mach_header), 1, file);
 
-        if (check_aslr_only) {
-            if (uses_application) {
-                fprintf(stdout, "Application (%s) %s ASLR\n", name, (has_aslr() ? "contains" : "does not contain"));
-            } else {
-                fprintf(stdout, "File %s ASLR\n", (has_aslr() ? "contains" : "does not contain"));
+        auto it = default_architectures.end();
+        if (default_architectures.size()) {
+            const NXArchInfo *archInfo = NXGetArchInfoFromCpuType(swap(header.magic, header.cputype), swap(header.magic, header.cpusubtype));
+
+            for (it = default_architectures.begin(); it != default_architectures.end(); it++) {
+                if (*it != archInfo) {
+                    continue;
+                }
+
+                if (uses_application) {
+                    notice("Application (%s) does not contain multiple architectures, but the executable is of type \"%s\", so ASLR removal will commence", name, archInfo->name);
+                } else {
+                    notice("File (%s) does not contain multiple architectures, but the executable is of type \"%s\", so ASLR removal will commence", name, archInfo->name);
+                }
+
+                break;
             }
 
-            return 0;
+            if (it == default_architectures.end()) {
+                if (uses_application) {
+                    notice("Application (%s) does not contain multiple architectures, but you can still specify architecture \"%s\" to remove ASLR from the executable", name, archInfo->name);
+                } else {
+                    notice("File (%s) does not contain multiple architectures, but you can still specify architecture \"%s\" to remove ASLR from it", name, archInfo->name);
+                }
+
+                return -1;
+            }
         }
 
-        //don't set header_offset since it's already 0x0
-        remove_aslr();
+        headers.insert(std::pair<long, struct mach_header>(0x0, header));
     }
 
     if (display_archs_only) {
@@ -755,7 +727,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
             if (uses_application) {
                 fprintf(stdout, "Application (%s) contains %ld architectures:\n", name, size);
             } else {
-                fprintf(stdout, "File contains %ld architectures:\n", size);
+                fprintf(stdout, "File (%s) contains %ld architectures:\n", name, size);
             }
 
             for (const NXArchInfo *archInfo : architectures) {
@@ -765,14 +737,58 @@ int main(int argc, const char * argv[], const char * envp[]) {
             if (uses_application) {
                 assert_("Application (%s) is not fat", name);
             } else {
-                assert_("File is not fat");
+                assert_("File (%s) is not fat", name);
             }
         }
 
         return 0;
     }
 
-    if (had_aslr) {
+    if (check_aslr_only) {
+        for (const auto& item : headers) {
+            struct mach_header header = item.second;
+
+            uint32_t cputype = swap(header.magic, header.cputype);
+            uint32_t cpusubtype = swap(header.magic, header.cpusubtype);
+
+            const NXArchInfo *archInfo = NXGetArchInfoFromCpuType(cputype, cpusubtype);
+            bool aslr = has_aslr(header);
+
+            fprintf(stdout, "Architecture (%s) %s ASLR", archInfo->name, (aslr ? "contains" : "does not contain"));
+            if (aslr && cputype == CPU_TYPE_ARM64) {
+                fprintf(stdout, " (Removing ASLR can cause crashes)");
+            }
+
+            fprintf(stdout, "\n");
+        }
+
+        return 0;
+    }
+
+    bool removed_aslr = false;
+
+    auto size = headers.size();
+    for (const auto& item : headers) {
+        long offset = item.first;
+        struct mach_header header = item.second;
+
+        uint32_t cputype = swap(header.magic, header.cputype);
+        uint32_t cpusubtype = swap(header.magic, header.cpusubtype);
+
+        bool is_thin = size < 2;
+        const NXArchInfo *archInfo = NXGetArchInfoFromCpuType(cputype, cpusubtype);
+
+        if (is_thin && !default_architectures.size()) { //also displays fat files with less than 2 archs as non-fat
+            archInfo = nullptr;
+        }
+
+        bool removed_aslr_ = remove_aslr(offset, header, archInfo);
+        if (!removed_aslr && removed_aslr_) {
+            removed_aslr = removed_aslr_;
+        }
+    }
+
+    if (removed_aslr) {
         if (uses_application) {
             fprintf(stdout, "\x1B[33mNote:\x1B[0m Application (%s) may not run til you have signed its executable (at path %s) (preferably with ldid)\n", name, binary_path);
         } else {
