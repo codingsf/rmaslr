@@ -214,17 +214,21 @@ int main(int argc, const char * argv[], const char * envp[]) {
             }
 
             i++;
-            name = argv[i];
+            char const * app_name = argv[i];
 
             CFArrayRef apps = SBSCopyApplicationDisplayIdentifiers(false, false);
             if (!apps) {
                 assert_("Unable to retrieve application-list");
             }
 
-            const char *executable_path = nullptr;
+            CFIndex i = 0;
             CFIndex count = CFArrayGetCount(apps);
 
-            for (CFIndex i = 0; i < count; i++) {
+            for (; i < count; i++) {
+                if (binary_path) {
+                    binary_path = nullptr;
+                }
+
                 CFStringRef bundle_id = (CFStringRef)CFArrayGetValueAtIndex(apps, i);
                 if (!bundle_id) {
                     continue;
@@ -239,30 +243,26 @@ int main(int argc, const char * argv[], const char * envp[]) {
                     continue;
                 }
 
-                executable_path = executable_path_;
+                name = display_name;
+                binary_path = executable_path_;
 
-                if (strcmp(name, bundle_id_) == 0) {
+                if (strcmp(app_name, bundle_id_) == 0) {
                     break;
-                } else if (strcmp(name, display_name) == 0) {
+                } else if (strcmp(app_name, display_name) == 0) {
                     break;
                 }
 
                 char const * executable_name = find_last_component(executable_path_);
-                if (strcmp(executable_name, name) != 0) {
+                if (strcmp(executable_name, app_name) != 0) {
                     continue;
                 }
-
-                name = display_name;
-                executable_path = executable_path_;
             }
 
-            if (!executable_path) {
-                assert_("Unable to find application %s", name);
+            if (i == count) {
+                assert_("Unable to find application %s", app_name);
             }
 
             uses_application = true;
-            binary_path = executable_path;
-
             if (access(binary_path, R_OK) != 0) {
                 if (access(binary_path, F_OK) != 0) {
                     assert_("Application (%s)'s executable does not exist", name);
@@ -398,6 +398,8 @@ int main(int argc, const char * argv[], const char * envp[]) {
     if (!binary_path) {
         assert_("Unable to get path");
     }
+
+    fprintf(stdout, "%d-%d-%d\n", uses_application, display_archs_only, check_aslr_only);
 
     FILE *file = fopen(binary_path, "r+");
     if (!file) {
@@ -750,6 +752,8 @@ int main(int argc, const char * argv[], const char * envp[]) {
     }
 
     if (check_aslr_only) {
+        fprintf(stdout, "This got called\n");
+
         for (const auto& item : headers) {
             struct mach_header header = item.second;
 
