@@ -74,6 +74,76 @@ __attribute__((unused)) static inline int64_t swap(uint32_t magic, int64_t value
     return static_cast<int64_t>(swap(magic, static_cast<uint64_t>(value)));
 }
 
+namespace std {
+    auto is_in_map = [](std::vector<std::map<const char *, std::string>> vector, std::string value) {
+        for (auto iter = vector.begin(); iter != vector.end(); iter++) {
+            auto iter_ = iter->begin();
+            for (; iter_ != iter->end(); iter_++) {
+                if (iter_->second == value) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    };
+
+    auto find_last_component = [](const std::string& string) noexcept {
+        auto pos = string.find_last_of('/');
+        if (pos == std::string::npos || pos == string.length()) {
+            //must specify std::string since compiler thinks we're using const char*
+            return std::string("");
+        }
+
+        return string.substr(pos + 1);
+    };
+
+    auto print_vector = [](std::vector<std::string>& vector) noexcept {
+        auto front = vector.front();
+        fprintf(stdout, "%s", front.c_str());
+
+        for (auto iter = vector.begin() + 1; iter < vector.end(); iter++) {
+            fprintf(stdout, ", %s", iter->c_str());
+        }
+
+        fprintf(stdout, "\n");
+    };
+}
+
+namespace Enviornment {
+    auto GetCurrentDirectory = []() noexcept {
+        size_t size = 4096;
+        char *buf = new char[size];
+
+        char *result = getcwd(buf, size);
+        if (!result) {
+            if (errno == ERANGE) {
+                do {
+                    size += 8;
+
+                    buf = new char[size];
+                    if (!buf) {
+                        error("Unable to allocate buffer (size=%ld) to get current working directory, errno=%d (%s)", size, errno, strerror(errno));
+                    }
+
+                    result = getcwd(buf, size);
+                } while (!result && errno == ERANGE);
+            } else {
+                error("Unable to get the current working directory, errno=%d (%s)", errno, strerror(errno));
+            }
+        }
+
+        std::string buffer = result;
+        if (buffer.back() != '/') {
+            buffer.append(1, '/');
+        }
+
+        return buffer;
+    };
+
+    static std::string CurrentDirectory = GetCurrentDirectory();
+}
+
 static CFArrayRef (*SBSCopyApplicationDisplayIdentifiers)(bool onlyActive, bool debugging) = nullptr;
 static CFStringRef (*SBSCopyLocalizedApplicationNameForDisplayIdentifier)(CFStringRef bundle_id) = nullptr;
 static CFStringRef (*SBSCopyExecutablePathForDisplayIdentifier)(CFStringRef bundle_id) = nullptr;
@@ -139,6 +209,106 @@ int main(int argc, const char * argv[], const char * envp[]) {
         option++;
     }
 
+    auto parse_application_container = [](const std::string& path) {
+        std::string name = std::find_last_component(path);
+
+        auto information = std::map<const char *, std::string>();
+        auto pos = name.find(".app");
+
+        if (pos == std::string::npos) {
+            return information;
+        }
+
+        if (pos == 0 || pos != (name.length() - (sizeof(".app") - 1))) {
+            return information;
+        }
+
+        std::string infoPath = path + "/Contents/Info.plist";
+        if (access(infoPath.c_str(), F_OK) != 0) {
+            return information;
+        }
+
+        CFStringRef pathString = CFStringCreateWithCString(kCFAllocatorDefault, infoPath.c_str(), kCFStringEncodingUTF8);
+        if (!pathString) {
+            return information;
+        }
+
+        CFURLRef pathURL = CFURLCreateWithFileSystemPath(kCFAllocatorDefault, pathString, kCFURLPOSIXPathStyle, false);
+        if (!pathString) {
+            return information;
+        }
+
+        CFReadStreamRef pathStream = CFReadStreamCreateWithFile(kCFAllocatorDefault, pathURL);
+        if (!pathStream) {
+            return information;
+        }
+
+        CFReadStreamOpen(pathStream);
+
+        CFErrorRef pathError = nullptr;
+        CFPropertyListRef pathPlist = CFPropertyListCreateWithStream(kCFAllocatorDefault, pathStream, 0, kCFPropertyListImmutable, nullptr, &pathError);
+
+        if (pathError) {
+            return information;
+        }
+
+        if (!pathPlist) {
+            return information;
+        }
+
+        if (CFGetTypeID(pathPlist) != CFDictionaryGetTypeID()) {
+            return information;
+        }
+
+        information = {
+            { "containerName", name.substr(0, pos) },
+            { "displayName", "" },
+            { "executableName", "" },
+            { "executablePath", ""}
+        };
+
+        CFStringRef executableKey = CFStringCreateWithCString(kCFAllocatorDefault, "CFBundleExecutable", kCFStringEncodingUTF8);
+        CFStringRef applicationKey = CFStringCreateWithCString(kCFAllocatorDefault, "CFBundleName", kCFStringEncodingUTF8);
+
+        CFDictionaryRef info = (CFDictionaryRef)pathPlist;
+        if (CFDictionaryContainsKey(info, executableKey)) {
+            CFStringRef executableName = (CFStringRef)CFDictionaryGetValue(info, executableKey);
+            if (executableName) {
+                if (CFGetTypeID(executableName) == CFStringGetTypeID()) {
+                    const char *executable_name = CFStringGetCStringPtr(executableName, kCFStringEncodingUTF8);
+                    information["executableName"] = executable_name;
+
+                    std::string executablePath = path + "/Contents/MacOS/";
+                    executablePath += executable_name;
+
+                    information["executablePath"] = executablePath;
+                }
+            }
+        }
+
+        if (CFDictionaryContainsKey(info, applicationKey)) {
+            CFStringRef applicationName = (CFStringRef)CFDictionaryGetValue(info, applicationKey);
+            if (applicationName) {
+                if (CFGetTypeID(applicationName) == CFStringGetTypeID()) {
+                    information["displayName"] = CFStringGetCStringPtr(applicationName, kCFStringEncodingUTF8);
+                }
+            }
+        }
+
+        return information;
+    };
+
+    auto print_vector = [](std::vector<const char *>& vector) {
+        auto front = vector.front();
+        fprintf(stdout, "%s", front);
+
+        for (auto iter = vector.begin() + 1; iter < vector.end(); iter++) {
+            fprintf(stdout, ", %s", *iter);
+        }
+
+        fprintf(stdout, "\n");
+    };
+
     if (strcmp(option, "h") == 0 || strcmp(option, "help") == 0 || strcmp(option, "u") == 0 || strcmp(option, "usage") == 0) {
         if (argc > 2) {
             assert_("Please run %s seperately", argument);
@@ -150,32 +320,19 @@ int main(int argc, const char * argv[], const char * envp[]) {
             assert_("Please run %s seperately", argument);
         }
 
+        auto applications = std::vector<std::string>();
+
         if (is_ios) {
-            CFArrayRef applications = SBSCopyApplicationDisplayIdentifiers(false, false);
-            if (!applications) {
+            CFArrayRef applications_ = SBSCopyApplicationDisplayIdentifiers(false, false);
+            if (!applications_) {
                 assert_("Unable to retrieve application-list");
             }
 
-            CFIndex applications_count = CFArrayGetCount(applications);
-            auto sorted_applications = std::vector<const char *>();
-
+            CFIndex applications_count = CFArrayGetCount(applications_);
             for (CFIndex i = 0; i < applications_count; i++) {
-                CFStringRef bundle_id = (CFStringRef)CFArrayGetValueAtIndex(applications, i);
-                sorted_applications.push_back(CFStringGetCStringPtr(SBSCopyLocalizedApplicationNameForDisplayIdentifier(bundle_id), kCFStringEncodingUTF8));
+                CFStringRef bundle_id = (CFStringRef)CFArrayGetValueAtIndex(applications_, i);
+                applications.push_back(CFStringGetCStringPtr(SBSCopyLocalizedApplicationNameForDisplayIdentifier(bundle_id), kCFStringEncodingUTF8));
             }
-
-            std::sort(sorted_applications.begin(), sorted_applications.end(), [](const char *first, const char *last) {
-                return strcmp(first, last) < 0;
-            });
-
-            fprintf(stdout, "%s", sorted_applications.front());
-            sorted_applications.erase(sorted_applications.begin());
-
-            for (const auto& application : sorted_applications) {
-                fprintf(stdout, ", %s", application);
-            }
-
-            fprintf(stdout, "\n");
         } else {
             DIR *directory = opendir("/Applications");
             if (!directory) {
@@ -185,101 +342,34 @@ int main(int argc, const char * argv[], const char * envp[]) {
             std::string applicationDirectory = "/Applications/";
             struct dirent *dir_entry = nullptr;
 
-            auto applications_list = std::vector<std::string>();
-
             while ((dir_entry = readdir(directory))) {
-                std::string application = applicationDirectory + dir_entry->d_name;
-                if (application.find(".app") != application.length() - 4) {
+                auto application = applicationDirectory + dir_entry->d_name;
+                auto application_information = parse_application_container(application);
+
+                if (application_information.empty()) {
                     continue;
                 }
 
-                application.append("/Contents/Info.plist");
-
-                if (access(application.c_str(), F_OK) != 0) {
-                    continue;
-                }
-
-                CFStringRef pathString = CFStringCreateWithCString(kCFAllocatorDefault, application.c_str(), kCFStringEncodingUTF8);
-                if (!pathString) {
-                    continue;
-                }
-
-                CFURLRef pathURL = CFURLCreateWithFileSystemPath(kCFAllocatorDefault, pathString, kCFURLPOSIXPathStyle, false);
-                if (!pathString) {
-                    continue;
-                }
-
-                CFReadStreamRef pathStream = CFReadStreamCreateWithFile(kCFAllocatorDefault, pathURL);
-                if (!pathStream) {
-                    continue;
-                }
-
-                CFReadStreamOpen(pathStream);
-
-                CFErrorRef pathError = nullptr;
-                CFPropertyListRef pathPlist = CFPropertyListCreateWithStream(kCFAllocatorDefault, pathStream, 0, kCFPropertyListImmutable, nullptr, &pathError);
-
-                if (pathError) {
-                    continue;
-                }
-
-                if (!pathPlist) {
-                    continue;
-                }
-
-                if (CFGetTypeID(pathPlist) != CFDictionaryGetTypeID()) {
-                    continue;
-                }
-
-                CFStringRef executableKey = CFStringCreateWithCString(kCFAllocatorDefault, "CFBundleExecutable", kCFStringEncodingUTF8);
-                CFStringRef applicationKey = CFStringCreateWithCString(kCFAllocatorDefault, "CFBundleName", kCFStringEncodingUTF8);
-
-                CFDictionaryRef info = (CFDictionaryRef)pathPlist;
-                if (!CFDictionaryContainsKey(info, executableKey)) {
-                    continue;
-                }
-
-                CFStringRef executableName = (CFStringRef)CFDictionaryGetValue(info, executableKey);
-                if (!executableName) {
-                    continue;
-                }
-
-                if (CFGetTypeID(executableName) != CFStringGetTypeID()) {
-                    continue;
-                }
-
-                if (CFDictionaryContainsKey(info, applicationKey)) {
-                    CFStringRef applicationName = (CFStringRef)CFDictionaryGetValue(info, applicationKey);
-                    if (!applicationName) {
-                        continue;
+                std::string name = application_information["displayName"];
+                if (name.empty() || std::find(applications.begin(), applications.end(), name) != applications.end()) {
+                    name = application_information["executableName"];
+                    if (name.empty() || std::find(applications.begin(), applications.end(), name) != applications.end()) {
+                        name = application_information["containerName"];
+                        if (name.empty() || std::find(applications.begin(), applications.end(), name) != applications.end()) {
+                            continue;
+                        }
                     }
-
-                    if (CFGetTypeID(applicationName) != CFStringGetTypeID()) {
-                        continue;
-                    }
-
-                    name = CFStringGetCStringPtr(applicationName, kCFStringEncodingUTF8);
-                    if (!strlen(name)) {
-                        name = CFStringGetCStringPtr(executableName, kCFStringEncodingUTF8);
-                    }
-                } else {
-                    name = CFStringGetCStringPtr(executableName, kCFStringEncodingUTF8);
                 }
 
-                applications_list.push_back(name);
+                applications.push_back(name);
             }
-
-            std::string application_front = applications_list.front();
-            fprintf(stdout, "%s", application_front.c_str());
-
-            applications_list.erase(applications_list.begin());
-            for (const auto& application : applications_list) {
-                fprintf(stdout, ", %s", application.c_str());
-            }
-
-            fprintf(stdout, "\n");
         }
 
+        std::sort(applications.begin(), applications.end(), [](std::string first, std::string second) {
+            return first < second;
+        });
+
+        std::print_vector(applications);
         return 0;
     } else if (strcmp(option, "archs") == 0) {
         if (argc > 2) {
@@ -337,18 +427,18 @@ int main(int argc, const char * argv[], const char * envp[]) {
             }
 
             i++;
-            char const * app_name = argv[i];
+            auto app_name = argv[i];
 
             if (is_ios) {
+                auto applications_found = std::vector<const char *>();
+
                 CFArrayRef apps = SBSCopyApplicationDisplayIdentifiers(false, false);
                 if (!apps) {
                     assert_("Unable to retrieve application-list");
                 }
 
-                CFIndex i = 0;
                 CFIndex count = CFArrayGetCount(apps);
-
-                for (; i < count; i++) {
+                for (CFIndex i = 0; i < count; i++) {
                     if (binary_path) {
                         binary_path = nullptr;
                     }
@@ -382,7 +472,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
                     }
                 }
 
-                if (i == count) {
+                if (applications_found.empty()) {
                     assert_("Unable to find application %s", app_name);
                 }
             } else {
@@ -391,122 +481,83 @@ int main(int argc, const char * argv[], const char * envp[]) {
                     error("Unable to access directory \"/Applications\".");
                 }
 
-                std::string applicationDirectory = "/Applications/";
+                auto applicationDirectory = std::string("/Applications/");
                 struct dirent *dir_entry = nullptr;
 
-                bool found = false;
+                auto applications_found = std::vector<std::map<const char *, std::string>>();
                 while ((dir_entry = readdir(directory))) {
-                    std::string application = applicationDirectory + dir_entry->d_name;
-                    if (application.find(".app") != application.length() - 4) {
+                    auto application = applicationDirectory + dir_entry->d_name;
+                    auto information = parse_application_container(application);
+
+                    if (information.empty()) {
                         continue;
                     }
 
-                    application.append("/Contents/Info.plist");
-
-                    if (access(application.c_str(), F_OK) != 0) {
-                        continue;
-                    }
-
-                    CFStringRef pathString = CFStringCreateWithCString(kCFAllocatorDefault, application.c_str(), kCFStringEncodingUTF8);
-                    if (!pathString) {
-                        continue;
-                    }
-
-                    CFURLRef pathURL = CFURLCreateWithFileSystemPath(kCFAllocatorDefault, pathString, kCFURLPOSIXPathStyle, false);
-                    if (!pathString) {
-                        continue;
-                    }
-
-                    CFReadStreamRef pathStream = CFReadStreamCreateWithFile(kCFAllocatorDefault, pathURL);
-                    if (!pathStream) {
-                        continue;
-                    }
-
-                    CFReadStreamOpen(pathStream);
-
-                    CFErrorRef pathError = nullptr;
-                    CFPropertyListRef pathPlist = CFPropertyListCreateWithStream(kCFAllocatorDefault, pathStream, 0, kCFPropertyListImmutable, nullptr, &pathError);
-
-                    if (pathError) {
-                        continue;
-                    }
-
-                    if (!pathPlist) {
-                        continue;
-                    }
-
-                    if (CFGetTypeID(pathPlist) != CFDictionaryGetTypeID()) {
-                        continue;
-                    }
-
-                    CFStringRef executableKey = CFStringCreateWithCString(kCFAllocatorDefault, "CFBundleExecutable", kCFStringEncodingUTF8);
-                    CFStringRef bundleidKey = CFStringCreateWithCString(kCFAllocatorDefault, "CFBundleIdentifier", kCFStringEncodingUTF8);
-                    CFStringRef applicationKey = CFStringCreateWithCString(kCFAllocatorDefault, "CFBundleName", kCFStringEncodingUTF8);
-
-                    CFDictionaryRef info = (CFDictionaryRef)pathPlist;
-                    if (!CFDictionaryContainsKey(info, executableKey)) {
-                        continue;
-                    }
-
-                    CFStringRef executableName = (CFStringRef)CFDictionaryGetValue(info, executableKey);
-                    if (!executableName) {
-                        continue;
-                    }
-
-                    if (CFGetTypeID(executableName) != CFStringGetTypeID()) {
-                        continue;
-                    }
-
-                    const char *executable_name = CFStringGetCStringPtr(executableName, kCFStringEncodingUTF8);
-
-                    if (CFDictionaryContainsKey(info, applicationKey)) {
-                        CFStringRef applicationName = (CFStringRef)CFDictionaryGetValue(info, applicationKey);
-                        if (!applicationName) {
-                            continue;
+                    name = information["displayName"].c_str();
+                    if (!strlen(name) || strcmp(app_name, name) != 0) {
+                        name = information["executableName"].c_str();
+                        if (!strlen(name) || strcmp(app_name, name) != 0) {
+                            name = information["containerName"].c_str();
+                            if (!strlen(name) || strcmp(app_name, name) != 0) {
+                                continue;
+                            }
                         }
-
-                        if (CFGetTypeID(applicationName) != CFStringGetTypeID()) {
-                            continue;
-                        }
-
-                        name = CFStringGetCStringPtr(applicationName, kCFStringEncodingUTF8);
-                        if (!strlen(name)) {
-                            name = executable_name;
-                        }
-                    } else {
-                        name = executable_name;
                     }
 
-                    CFStringRef bundleIdentifier = (CFStringRef)CFDictionaryGetValue(info, bundleidKey);
-                    if (!bundleIdentifier) {
-                        continue;
-                    }
-
-                    if (CFGetTypeID(bundleIdentifier) != CFStringGetTypeID()) {
-                        continue;
-                    }
-
-                    std::string executableDirectory = applicationDirectory + dir_entry->d_name;
-
-                    executableDirectory += "/Contents/MacOS/";
-                    executableDirectory += executable_name;
-
-                    binary_path = strdup(executableDirectory.c_str());
-                    if (strcmp(name, app_name) == 0 || strcmp(executable_name, app_name) == 0 || strcmp(CFStringGetCStringPtr(bundleIdentifier, kCFStringEncodingUTF8), app_name) == 0) {
-                        found = true;
-                        break;
-                    }
+                    applications_found.push_back(information);
                 }
 
-                if (!found) {
+                if (applications_found.empty()) {
                     assert_("Unable to find application \"%s\"", app_name);
+                }
+
+                if (applications_found.size() > 1) {
+                    fprintf(stdout, "Multiple Applications with name (\"%s\") have been found:\n", app_name);
+
+                    int i = 1;
+                    for (auto iter = applications_found.begin(); iter != applications_found.end(); iter++) {
+                        auto information = *iter;
+                        fprintf(stdout, "%d. Application (Container Name: \"%s\", Display Name: \"%s\", Executable Name: \"%s\")\n", i, information["containerName"].c_str(), information["displayName"].c_str(), information["executableName"].c_str());
+                        i++;
+                    }
+
+                    int result = -1;
+                    while (result < 1 || result > applications_found.size()) {
+                        std::cout << "Please select one of the applications by number: ";
+                        std::cin >> result;
+                    }
+
+                    auto application_information = applications_found[result - 1];
+                    binary_path = strdup(application_information["executablePath"].c_str());
+
+                    auto displayName = application_information["displayName"];
+                    auto containerName = application_information["containerName"];
+                    auto executableName = application_information["executableName"];
+
+                    auto iter = std::find(applications_found.begin(), applications_found.end(), application_information);
+                    if (iter != applications_found.end()) {
+                        applications_found.erase(iter);
+                    }
+
+                    if (!std::is_in_map(applications_found, displayName)) {
+                        name = strdup(displayName.c_str());
+                    } else if (!std::is_in_map(applications_found, containerName)) {
+                        name = strdup(containerName.c_str());
+                    } else if (!std::is_in_map(applications_found, executableName)) {
+                        name = strdup(executableName.c_str());
+                    }
+                } else {
+                    auto application_information = applications_found.front();
+
+                    name = strdup(application_information["displayName"].c_str());
+                    binary_path = strdup(application_information["executablePath"].c_str());
                 }
             }
 
             uses_application = true;
             if (access(binary_path, R_OK) != 0) {
                 if (access(binary_path, F_OK) != 0) {
-                    assert_("Application (%s)'s executable does not exist", name);
+                    assert_("Application (%s)'s executable does not exist, at path (%s)", name, binary_path);
                 }
 
                 assert_("Unable to read Application (%s)'s executable", name);
@@ -520,37 +571,10 @@ int main(int argc, const char * argv[], const char * envp[]) {
             const char *path = argv[i];
 
             if (path[0] != '/') {
-                size_t size = 4096;
-                char *buf = new char[size];
+                std::string current_directory = Enviornment::CurrentDirectory;
 
-                char *result = getcwd(buf, size);
-                if (!result) {
-                    if (errno == ERANGE) {
-                        do {
-                            size += 8;
-
-                            buf = new char[size];
-                            if (!buf) {
-                                assert_("Unable to allocate buffer (size=%ld) to get current working directory, errno=%d (%s)", size, errno, strerror(errno));
-                            }
-
-                            result = getcwd(buf, size);
-                        } while (!result && errno == ERANGE);
-                    } else {
-                        assert_("Unable to get the current working directory, errno=%d (%s)", errno, strerror(errno));
-                    }
-                }
-
-                //use std::string for safety (so we don't end up writing outside buf, while trying to append a '/')
-                std::string buffer = buf;
-
-                //unable to use back() even though we're on c++14
-                if (*(buffer.end() - 1) != '/') {
-                    buffer.append(1, '/');
-                }
-
-                buffer.append(path);
-                path = buffer.c_str();
+                current_directory.append(path);
+                path = current_directory.c_str();
             }
 
             struct stat sbuf;
@@ -561,86 +585,19 @@ int main(int argc, const char * argv[], const char * envp[]) {
             name = find_last_component(path);
 
             if (!is_ios && S_ISDIR(sbuf.st_mode)) {
-                std::string path_ = path;
-                path_.append("/Contents/Info.plist");
+                auto path_ = std::string(path);
+                auto information = parse_application_container(path_);
 
-                if (access(path_.c_str(), F_OK) != 0) {
-                    assert_("Directory at path (%s) is not a valid application bundle", binary_path);
+                if (information.empty()) {
+                    assert_("Directory at path (%s) is not an application", path);
                 }
 
-                CFStringRef pathString = CFStringCreateWithCString(kCFAllocatorDefault, path_.c_str(), kCFStringEncodingUTF8);
-                if (!pathString) {
-                    assert_("Unable to make CFStringRef necesscary for parsing Info.plist");
+                path = information["executablePath"].c_str();
+                if (!strlen(path) || access(path, F_OK) != 0) {
+                    assert_("Executable at path (\"%s\") is not valid (either not found in Info.plist or not present on the filesystem)", path);
                 }
-
-                CFURLRef pathURL = CFURLCreateWithFileSystemPath(kCFAllocatorDefault, pathString, kCFURLPOSIXPathStyle, false);
-                if (!pathString) {
-                    assert_("Unable to make CFURLRef necesscary for parsing Info.plist");
-                }
-
-                CFReadStreamRef pathStream = CFReadStreamCreateWithFile(kCFAllocatorDefault, pathURL);
-                if (!pathStream) {
-                    assert_("Unable to make CFDataRef necesscary for parsing Info.plist");
-                }
-
-                CFReadStreamOpen(pathStream);
-
-                CFErrorRef pathError = nullptr;
-                CFPropertyListRef pathPlist = CFPropertyListCreateWithStream(kCFAllocatorDefault, pathStream, 0, kCFPropertyListImmutable, nullptr, &pathError);
-
-                if (pathError) {
-                    assert_("An error occurred (%s) while parsing Info.plist at path (%s)", CFStringGetCStringPtr(CFErrorCopyDescription(pathError), kCFStringEncodingUTF8), path_.c_str());
-                }
-
-                if (!pathPlist) {
-                    assert_("An error occurred while parsing Info.plist at path (%s)", path_.c_str());
-                }
-
-                if (CFGetTypeID(pathPlist) != CFDictionaryGetTypeID()) {
-                    assert_("Info.plist at path (%s) is not a dictionary-xml, %s", path_.c_str(), CFStringGetCStringPtr((CFStringRef)pathPlist, kCFStringEncodingUTF8));
-                }
-
-                CFStringRef executableKey = CFStringCreateWithCString(kCFAllocatorDefault, "CFBundleExecutable", kCFStringEncodingUTF8);
-                CFStringRef applicationKey = CFStringCreateWithCString(kCFAllocatorDefault, "CFBundleName", kCFStringEncodingUTF8);
-
-                CFDictionaryRef info = (CFDictionaryRef)pathPlist;
-                if (!CFDictionaryContainsKey(info, executableKey)) {
-                    assert_("Info.plist at path (%s) is not valid", path_.c_str());
-                }
-
-                CFStringRef executableName = (CFStringRef)CFDictionaryGetValue(info, executableKey);
-                if (!executableName) {
-                    assert_("Unable to get executable-path from Info.plist at path (%s)", path_.c_str());
-                }
-
-                if (CFGetTypeID(executableName) != CFStringGetTypeID()) {
-                    assert_("Info.plist at path (%s) is invalid", path_.c_str());
-                }
-
-                if (CFDictionaryContainsKey(info, applicationKey)) {
-                    CFStringRef applicationName = (CFStringRef)CFDictionaryGetValue(info, applicationKey);
-                    if (!applicationName) {
-                        assert_("Unable to get application-name from Info.plist at path (%s)", path_.c_str());
-                    }
-
-                    if (CFGetTypeID(applicationName) != CFStringGetTypeID()) {
-                        assert_("Info.plist at path (%s) is invalid", path_.c_str());
-                    }
-
-                    name = CFStringGetCStringPtr(applicationName, kCFStringEncodingUTF8);
-                    if (!strlen(name)) {
-                        name = CFStringGetCStringPtr(executableName, kCFStringEncodingUTF8);
-                    }
-                } else {
-                    name = CFStringGetCStringPtr(executableName, kCFStringEncodingUTF8);
-                }
-
-                path_ = path;
-                path_.append("/Contents/MacOS/");
-                path_.append(CFStringGetCStringPtr(executableName, kCFStringEncodingUTF8));
 
                 uses_application = true;
-                path = path_.c_str();
             }
 
             binary_path = path;
