@@ -76,10 +76,9 @@ __attribute__((unused)) static inline int64_t swap(uint32_t magic, int64_t value
 
 namespace std {
     auto is_in_map = [](std::vector<std::map<const char *, std::string>> vector, std::string value) {
-        for (auto iter = vector.begin(); iter != vector.end(); iter++) {
-            auto iter_ = iter->begin();
-            for (; iter_ != iter->end(); iter_++) {
-                if (iter_->second == value) {
+        for (const auto& item : vector) {
+            for (const auto& item_ : item) {
+                if (item_.second == value) {
                     return true;
                 }
             }
@@ -98,11 +97,11 @@ namespace std {
         return string.substr(pos + 1);
     };
 
-    auto print_vector = [](std::vector<std::string>& vector) noexcept {
+    auto print_vector = [](const std::vector<std::string>& vector) noexcept {
         auto front = vector.front();
         fprintf(stdout, "%s", front.c_str());
 
-        for (auto iter = vector.begin() + 1; iter < vector.end(); iter++) {
+        for (auto iter = vector.begin()++; iter < vector.end(); iter++) {
             fprintf(stdout, ", %s", iter->c_str());
         }
 
@@ -112,8 +111,12 @@ namespace std {
 
 namespace Enviornment {
     auto GetCurrentDirectory = []() noexcept {
-        size_t size = 4096;
+        size_t size = PATH_MAX;
         char *buf = new char[size];
+
+        if (!buf) {
+            error("Unable to allocate buffer (size=%ld) to get current working directory, errno=%d (%s)", size, errno, strerror(errno));
+        }
 
         char *result = getcwd(buf, size);
         if (!result) {
@@ -350,11 +353,12 @@ int main(int argc, const char * argv[], const char * envp[]) {
                     continue;
                 }
 
-                std::string name = application_information["displayName"];
+                std::string name = application_information["containerName"];
                 if (name.empty() || std::find(applications.begin(), applications.end(), name) != applications.end()) {
-                    name = application_information["executableName"];
+                    name = application_information["displayName"];
                     if (name.empty() || std::find(applications.begin(), applications.end(), name) != applications.end()) {
                         name = application_information["containerName"];
+                        fprintf(stdout, "Name is %s\n", name.c_str());
                         if (name.empty() || std::find(applications.begin(), applications.end(), name) != applications.end()) {
                             continue;
                         }
@@ -365,8 +369,18 @@ int main(int argc, const char * argv[], const char * envp[]) {
             }
         }
 
-        std::sort(applications.begin(), applications.end(), [](std::string first, std::string second) {
-            return first < second;
+        std::sort(applications.begin(), applications.end(), [](const std::string& first, const std::string& second) {
+            auto length = std::min(first.length(), second.length());
+            for (auto i = 0; i < length; i++) {
+                char fc = tolower(first[i]);
+                char sc = tolower(second[i]);
+
+                if (fc != sc) {
+                    return fc < sc;
+                }
+            }
+
+            return true;
         });
 
         std::print_vector(applications);
