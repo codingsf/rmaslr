@@ -74,6 +74,8 @@ __attribute__((unused)) static inline int64_t swap(uint32_t magic, int64_t value
     return static_cast<int64_t>(swap(magic, static_cast<uint64_t>(value)));
 }
 
+static bool is_ios = false;
+
 namespace std {
     auto is_in_map = [](std::vector<std::map<const char *, std::string>> vector, std::string value) {
         for (const auto& item : vector) {
@@ -97,19 +99,65 @@ namespace std {
         return string.substr(pos + 1);
     };
 
-    auto print_vector = [](const std::vector<std::string>& vector) noexcept {
-        auto front = vector.front();
-        fprintf(stdout, "%s", front.c_str());
+    auto print_vector = [](const std::vector<std::map<const char *, std::string>>& vector, bool use_listing = false) noexcept {
+        if (use_listing) {
+            int i = 1;
+            for (const auto& information : vector) {
+                if (is_ios) {
+                    fprintf(stdout, "%d. Application (Display Name: \"%s\", Executable Name: \"%s\", Bundle Identifier: \"%s\")\n", i, information.at("displayName").c_str(), information.at("executableName").c_str(), information.at("bundleIdentifier").c_str());
+                } else {
+                    fprintf(stdout, "%d. Application (Container Name: \"%s\", Display Name: \"%s\", Executable Name: \"%s\", Bundle Identifier: \"%s\")\n", i, information.at("containerName").c_str(), information.at("displayName").c_str(), information.at("executableName").c_str(), information.at("bundleIdentifier").c_str());
+                }
 
-        for (auto iter = vector.begin()++; iter < vector.end(); iter++) {
-            fprintf(stdout, ", %s", iter->c_str());
+                i++;
+            }
+        } else {
+            auto string_vector = std::vector<std::string>();
+            for (const auto& information : vector) {
+                std::string name = information.at("containerName");
+                if (name.empty()) {
+                    name = information.at("displayName");
+                    if (name.empty()) {
+                        name = information.at("executableName");
+                        if (name.empty()) {
+                            continue;
+                        }
+                    }
+                }
+
+                string_vector.push_back(name);
+            }
+
+            std::sort(string_vector.begin(), string_vector.end(), [](const std::string& first, const std::string& second) {
+                auto length = std::min(first.length(), second.length());
+                for (auto i = 0; i < length; i++) {
+                    char fc = tolower(first[i]);
+                    char sc = tolower(second[i]);
+
+                    if (fc == sc) {
+                        continue;
+                    }
+
+                    return fc < sc;
+                }
+
+                return true;
+            });
+
+            auto front = string_vector.front();
+            string_vector.erase(string_vector.begin());
+
+            fprintf(stdout, "%s", front.c_str());
+            for (const auto& name : string_vector) {
+                fprintf(stdout, ", %s", name.c_str());
+            }
+
+            fprintf(stdout, "\n");
         }
-
-        fprintf(stdout, "\n");
     };
 }
 
-namespace Enviornment {
+namespace Environment {
     auto GetCurrentDirectory = []() noexcept {
         size_t size = PATH_MAX;
         char *buf = new char[size];
@@ -181,7 +229,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
     const char *binary_path = nullptr;
 
     //needs a better method
-    bool is_ios = access("/System/Library/PrivateFrameworks/SpringBoardServices.framework", F_OK) == 0;
+    is_ios = access("/System/Library/PrivateFrameworks/SpringBoardServices.framework", F_OK) == 0;
     void *handle = nullptr;
 
     if (is_ios) {
@@ -264,14 +312,16 @@ int main(int argc, const char * argv[], const char * envp[]) {
         }
 
         information = {
+            { "bundleIdentifier", "" },
             { "containerName", name.substr(0, pos) },
             { "displayName", "" },
             { "executableName", "" },
             { "executablePath", ""}
         };
 
-        CFStringRef executableKey = CFStringCreateWithCString(kCFAllocatorDefault, "CFBundleExecutable", kCFStringEncodingUTF8);
         CFStringRef applicationKey = CFStringCreateWithCString(kCFAllocatorDefault, "CFBundleName", kCFStringEncodingUTF8);
+        CFStringRef identifierKey = CFStringCreateWithCString(kCFAllocatorDefault, "CFBundleIdentifier", kCFStringEncodingUTF8);
+        CFStringRef executableKey = CFStringCreateWithCString(kCFAllocatorDefault, "CFBundleExecutable", kCFStringEncodingUTF8);
 
         CFDictionaryRef info = (CFDictionaryRef)pathPlist;
         if (CFDictionaryContainsKey(info, executableKey)) {
@@ -298,18 +348,28 @@ int main(int argc, const char * argv[], const char * envp[]) {
             }
         }
 
+        if (CFDictionaryContainsKey(info, identifierKey)) {
+            CFStringRef identifier = (CFStringRef)CFDictionaryGetValue(info, identifierKey);
+            if (identifier) {
+                if (CFGetTypeID(identifier) == CFStringGetTypeID()) {
+                    information["bundleIdentifier"] = CFStringGetCStringPtr(identifierKey, kCFStringEncodingUTF8);
+                }
+            }
+        }
+
         return information;
     };
 
-    auto print_vector = [](std::vector<const char *>& vector) {
-        auto front = vector.front();
-        fprintf(stdout, "%s", front);
+    auto find_last_component = [](const char *string) {
+        char const *result = string;
+        char const *result_ = string;
 
-        for (auto iter = vector.begin() + 1; iter < vector.end(); iter++) {
-            fprintf(stdout, ", %s", *iter);
+        while ((result = strchr(result_, '/'))) {
+            result_ = result;
+            result_++;
         }
 
-        fprintf(stdout, "\n");
+        return &string[(uintptr_t)result_ - (uintptr_t)string];
     };
 
     if (strcmp(option, "h") == 0 || strcmp(option, "help") == 0 || strcmp(option, "u") == 0 || strcmp(option, "usage") == 0) {
@@ -319,11 +379,21 @@ int main(int argc, const char * argv[], const char * envp[]) {
 
         print_usage();
     } else if (strcmp(option, "apps") == 0 || strcmp(option, "-applications") == 0) {
+        bool use_listing = false;
         if (argc > 2) {
-            assert_("Please run %s seperately", argument);
+            if (argc > 3) {
+                assert_("Too many arguments provided");
+            }
+
+            option = argv[2];
+            if (strcmp(option, "-list") == 0 || strcmp(option, "--list") == 0) {
+                use_listing = true;
+            } else {
+                assert_("Unrecognized argument: \"%s\"", option);
+            }
         }
 
-        auto applications = std::vector<std::string>();
+        auto applications = std::vector<std::map<const char *, std::string>>();
 
         if (is_ios) {
             CFArrayRef applications_ = SBSCopyApplicationDisplayIdentifiers(false, false);
@@ -334,7 +404,25 @@ int main(int argc, const char * argv[], const char * envp[]) {
             CFIndex applications_count = CFArrayGetCount(applications_);
             for (CFIndex i = 0; i < applications_count; i++) {
                 CFStringRef bundle_id = (CFStringRef)CFArrayGetValueAtIndex(applications_, i);
-                applications.push_back(CFStringGetCStringPtr(SBSCopyLocalizedApplicationNameForDisplayIdentifier(bundle_id), kCFStringEncodingUTF8));
+
+                const char *displayName = CFStringGetCStringPtr(SBSCopyLocalizedApplicationNameForDisplayIdentifier(bundle_id), kCFStringEncodingUTF8);
+                const char *bundleIdentifier = "";
+
+                const char *executablePath = "";
+                const char *executableName = "";
+
+                if (use_listing) {
+                    bundleIdentifier = CFStringGetCStringPtr(bundle_id, kCFStringEncodingUTF8);
+                    executablePath = CFStringGetCStringPtr(SBSCopyExecutablePathForDisplayIdentifier(bundle_id), kCFStringEncodingUTF8);
+
+                    executableName = find_last_component(executablePath);
+                }
+
+                if (!displayName || !bundleIdentifier || !executablePath || !executableName) {
+                    continue;
+                }
+
+                applications.push_back({{ "bundleIdentifier", bundleIdentifier }, { "displayName", displayName }, { "containerName", "" }, { "executableName", executableName }, { "executablePath", executablePath }});
             }
         } else {
             DIR *directory = opendir("/Applications");
@@ -353,37 +441,11 @@ int main(int argc, const char * argv[], const char * envp[]) {
                     continue;
                 }
 
-                std::string name = application_information["containerName"];
-                if (name.empty() || std::find(applications.begin(), applications.end(), name) != applications.end()) {
-                    name = application_information["displayName"];
-                    if (name.empty() || std::find(applications.begin(), applications.end(), name) != applications.end()) {
-                        name = application_information["containerName"];
-                        fprintf(stdout, "Name is %s\n", name.c_str());
-                        if (name.empty() || std::find(applications.begin(), applications.end(), name) != applications.end()) {
-                            continue;
-                        }
-                    }
-                }
-
-                applications.push_back(name);
+                applications.push_back(application_information);
             }
         }
 
-        std::sort(applications.begin(), applications.end(), [](const std::string& first, const std::string& second) {
-            auto length = std::min(first.length(), second.length());
-            for (auto i = 0; i < length; i++) {
-                char fc = tolower(first[i]);
-                char sc = tolower(second[i]);
-
-                if (fc != sc) {
-                    return fc < sc;
-                }
-            }
-
-            return true;
-        });
-
-        std::print_vector(applications);
+        std::print_vector(applications, use_listing);
         return 0;
     } else if (strcmp(option, "archs") == 0) {
         if (argc > 2) {
@@ -410,18 +472,6 @@ int main(int argc, const char * argv[], const char * envp[]) {
         return 0;
     }
 
-    auto find_last_component = [](const char *string) {
-        char const *result = string;
-        char const *result_ = string;
-
-        while ((result = strchr(result_, '/'))) {
-            result_ = result;
-            result_++;
-        }
-
-        return &string[(uintptr_t)result_ - (uintptr_t)string];
-    };
-
     for (int i = 1; i < argc; i++) {
         argument = argv[i];
         if (argument[0] != '-') {
@@ -441,11 +491,11 @@ int main(int argc, const char * argv[], const char * envp[]) {
             }
 
             i++;
+
+            auto applications_found = std::vector<std::map<const char *, std::string>>();
             auto app_name = argv[i];
 
             if (is_ios) {
-                auto applications_found = std::vector<const char *>();
-
                 CFArrayRef apps = SBSCopyApplicationDisplayIdentifiers(false, false);
                 if (!apps) {
                     assert_("Unable to retrieve application-list");
@@ -466,28 +516,34 @@ int main(int argc, const char * argv[], const char * envp[]) {
                     char const * executable_path_ = CFStringGetCStringPtr(SBSCopyExecutablePathForDisplayIdentifier(bundle_id), kCFStringEncodingUTF8);
                     char const * bundle_id_ = CFStringGetCStringPtr(bundle_id, kCFStringEncodingUTF8);
 
+                    char const * executable_name = find_last_component(executable_path_);
+
                     //apparently "iTunesU" has a null display name?
                     if (!display_name || !executable_path_ || !bundle_id_) {
                         continue;
                     }
 
-                    name = display_name;
-                    binary_path = executable_path_;
-
-                    if (strcmp(app_name, bundle_id_) == 0) {
-                        break;
-                    } else if (strcmp(app_name, display_name) == 0) {
-                        break;
+                    const char *name_ = display_name;
+                    if (!strlen(name_) || strcmp(name_, app_name)) {
+                        name_ = executable_name;
+                        if (!strlen(name_) || strcmp(name_, app_name)) {
+                            name_ = bundle_id_;
+                            if (!strlen(name_) || strcmp(name_, app_name)) {
+                                continue;
+                            }
+                        }
                     }
 
-                    char const * executable_name = find_last_component(executable_path_);
-                    if (strcmp(executable_name, app_name) != 0) {
-                        continue;
-                    }
-                }
+                    auto information = std::map<const char *, std::string>();
+                    information = {
+                        { "bundleIdentifier", bundle_id_ },
+                        { "containerName", "" },
+                        { "displayName", display_name },
+                        { "executableName", executable_name },
+                        { "executablePath", executable_path_ }
+                    };
 
-                if (applications_found.empty()) {
-                    assert_("Unable to find application %s", app_name);
+                    applications_found.push_back(information);
                 }
             } else {
                 DIR *directory = opendir("/Applications");
@@ -498,7 +554,6 @@ int main(int argc, const char * argv[], const char * envp[]) {
                 auto applicationDirectory = std::string("/Applications/");
                 struct dirent *dir_entry = nullptr;
 
-                auto applications_found = std::vector<std::map<const char *, std::string>>();
                 while ((dir_entry = readdir(directory))) {
                     auto application = applicationDirectory + dir_entry->d_name;
                     auto information = parse_application_container(application);
@@ -507,12 +562,12 @@ int main(int argc, const char * argv[], const char * envp[]) {
                         continue;
                     }
 
-                    name = information["displayName"].c_str();
-                    if (!strlen(name) || strcmp(app_name, name) != 0) {
-                        name = information["executableName"].c_str();
-                        if (!strlen(name) || strcmp(app_name, name) != 0) {
-                            name = information["containerName"].c_str();
-                            if (!strlen(name) || strcmp(app_name, name) != 0) {
+                    std::string name = information["containerName"];
+                    if (name.empty() || name != app_name) {
+                        name = information["displayName"];
+                        if (name.empty() || name != app_name) {
+                            name = information["executableName"];
+                            if (name.empty() || name != app_name) {
                                 continue;
                             }
                         }
@@ -520,52 +575,63 @@ int main(int argc, const char * argv[], const char * envp[]) {
 
                     applications_found.push_back(information);
                 }
+            }
 
-                if (applications_found.empty()) {
-                    assert_("Unable to find application \"%s\"", app_name);
-                }
+            if (applications_found.empty()) {
+                assert_("Unable to find application \"%s\"", app_name);
+            }
 
-                if (applications_found.size() > 1) {
-                    fprintf(stdout, "Multiple Applications with name (\"%s\") have been found:\n", app_name);
+            if (applications_found.size() > 1) {
+                fprintf(stdout, "Multiple Applications with name (\"%s\") have been found:\n", app_name);
 
-                    int i = 1;
-                    for (auto iter = applications_found.begin(); iter != applications_found.end(); iter++) {
-                        auto information = *iter;
+                int i = 1;
+                for (auto iter = applications_found.begin(); iter != applications_found.end(); iter++) {
+                    auto information = *iter;
+
+                    if (is_ios) {
+                        fprintf(stdout, "%d. Application (Display Name: \"%s\", Executable Name: \"%s\")\n", i, information["displayName"].c_str(), information["executableName"].c_str());
+                    } else {
                         fprintf(stdout, "%d. Application (Container Name: \"%s\", Display Name: \"%s\", Executable Name: \"%s\")\n", i, information["containerName"].c_str(), information["displayName"].c_str(), information["executableName"].c_str());
-                        i++;
                     }
 
-                    int result = -1;
-                    while (result < 1 || result > applications_found.size()) {
-                        std::cout << "Please select one of the applications by number: ";
-                        std::cin >> result;
-                    }
-
-                    auto application_information = applications_found[result - 1];
-                    binary_path = strdup(application_information["executablePath"].c_str());
-
-                    auto displayName = application_information["displayName"];
-                    auto containerName = application_information["containerName"];
-                    auto executableName = application_information["executableName"];
-
-                    auto iter = std::find(applications_found.begin(), applications_found.end(), application_information);
-                    if (iter != applications_found.end()) {
-                        applications_found.erase(iter);
-                    }
-
-                    if (!std::is_in_map(applications_found, displayName)) {
-                        name = strdup(displayName.c_str());
-                    } else if (!std::is_in_map(applications_found, containerName)) {
-                        name = strdup(containerName.c_str());
-                    } else if (!std::is_in_map(applications_found, executableName)) {
-                        name = strdup(executableName.c_str());
-                    }
-                } else {
-                    auto application_information = applications_found.front();
-
-                    name = strdup(application_information["displayName"].c_str());
-                    binary_path = strdup(application_information["executablePath"].c_str());
+                    i++;
                 }
+
+                int result = -1;
+                while (result < 1 || result > applications_found.size()) {
+                    std::cout << "Please select one of the applications by number: ";
+                    std::cin >> result;
+                }
+
+                auto application_information = applications_found[result - 1];
+                binary_path = strdup(application_information["executablePath"].c_str());
+
+                auto displayName = application_information["displayName"];
+                auto containerName = application_information["containerName"];
+                auto executableName = application_information["executableName"];
+
+                auto iter = std::find(applications_found.begin(), applications_found.end(), application_information);
+                if (iter != applications_found.end()) {
+                    applications_found.erase(iter);
+                }
+
+                if (!std::is_in_map(applications_found, containerName) && !is_ios) {
+                    name = strdup(containerName.c_str());
+                } else if (!std::is_in_map(applications_found, displayName)) {
+                    name = strdup(displayName.c_str());
+                } else if (!std::is_in_map(applications_found, executableName)) {
+                    name = strdup(executableName.c_str());
+                }
+            } else {
+                auto application_information = applications_found.front();
+
+                if (is_ios) {
+                    name = strdup(application_information["displayName"].c_str());
+                } else {
+                    name = app_name;
+                }
+
+                binary_path = strdup(application_information["executablePath"].c_str());
             }
 
             uses_application = true;
@@ -585,7 +651,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
             const char *path = argv[i];
 
             if (path[0] != '/') {
-                std::string current_directory = Enviornment::CurrentDirectory;
+                std::string current_directory = Environment::CurrentDirectory;
 
                 current_directory.append(path);
                 path = current_directory.c_str();
