@@ -190,9 +190,7 @@ namespace std {
             }
 
             auto get_spaces = [](std::string::size_type length) {
-                std::string return_value;
-                return_value.resize(length, ' ');
-
+                auto return_value = std::string(length, ' ');
                 return return_value;
             };
 
@@ -216,7 +214,7 @@ namespace std {
                 return length++;
             };
 
-            auto i = 0;
+            auto i = 1;
             auto size_spaces = get_spaces(get_size(sorted_vector.size()));
 
             for (auto& information : sorted_vector) {
@@ -1157,7 +1155,10 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
 
                 if (display_archs) {
                     architectures.push_back(archInfo);
-                    continue;
+
+                    if (!check_aslr) {
+                        continue;
+                    }
                 }
 
                 auto it = default_architectures.end();
@@ -1264,9 +1265,11 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
                         fprintf(stdout, ", removing it can cause crashes");
                     }
 
-                    fprintf(stdout, ")\n");
                     i++;
+                    fprintf(stdout, ")");
                 }
+
+                fprintf(stdout, "\n");
             }
         } else {
             if (uses_application) {
