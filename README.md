@@ -1,5 +1,5 @@
 # rmaslr
-Command line tool to Remove ASLR from iOS Applications & Binaries
+Command line tool to Remove ASLR from mach-o binaries and ios/mac Applications
 ```
 Usage: rmaslr -a application
 Options:
