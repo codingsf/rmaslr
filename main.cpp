@@ -162,7 +162,6 @@ namespace std {
                 return fc < sc;
             }
 
-            fprintf(stdout, "called here!\"%s\" - \"%s\"\n", first_name.c_str(), second_name.c_str());
             return first_name.size() < second_name.size();
         });
 
@@ -328,8 +327,8 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
     //for fancy debug messages
     bool uses_application = false;
 
-    bool display_archs_only = false;
-    bool check_aslr_only = false;
+    bool display_archs = false;
+    bool check_aslr = false;
 
     const char *name = nullptr;
     const char *binary_path = nullptr;
@@ -743,7 +742,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
                     return length++;
                 };
 
-                auto i = 0;
+                auto i = 1;
                 auto size_spaces = get_spaces(get_size(applications_found.size()));
 
                 for (auto iter = applications_found.begin(); iter != applications_found.end(); iter++) {
@@ -860,18 +859,13 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
                 assert_("Please select an application or binary first");
             }
 
-            if (display_archs_only) {
+            if (display_archs) {
                 assert_("Cannot print architectures and choose an architecture from which to remove ASLR from at the same time");
             }
 
-            if (check_aslr_only) {
-                assert_("Cannot check aslr status and select an architecture from which to remove ASLR from at the same time");
-            }
-
-            int j = ++i;
-
-            for (; j < argc; j++) {
-                const char *architecture = argv[j];
+            i++;
+            for (; i < argc; i++) {
+                const char *architecture = argv[i];
                 const NXArchInfo *archInfo = NXGetArchInfoFromName(architecture);
 
                 if (!archInfo) {
@@ -881,44 +875,36 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
                 default_architectures.push_back(archInfo);
             }
 
+            i--;
+
             default_architectures_original_size = default_architectures.size();
             if (!default_architectures_original_size) {
-                assert_("%s is not a valid architecture", argv[j]);
+                assert_("%s is not a valid architecture", argv[i]);
             }
-
-            i = j;
         } else if (strcmp(option, "archs") == 0 || strcmp(option, "architectures") == 0) {
             if (!binary_path) {
                 assert_("Please select an application or binary first");
-            }
-
-            if (check_aslr_only) {
-                assert_("Cannot both display architectures and display aslr-status");
             }
 
             if (default_architectures.size()) {
                 assert_("Cannot both display architectures and select an arch to remove ASLR from");
             }
 
-            if (display_archs_only) {
+            if (display_archs) {
                 assert_("rmaslr is already configured to only print architectures");
             }
 
-            display_archs_only = true;
+            display_archs = true;
         } else if (strcmp(option, "c") == 0 || strcmp(option, "check") == 0) {
             if (!binary_path) {
                 assert_("Please select an application or binary first");
             }
 
-            if (display_archs_only) {
-                assert_("Can't display architectures & aslr-status at the same time");
-            }
-
-            if (check_aslr_only) {
+            if (check_aslr) {
                 assert_("rmaslr is already configured to check for aslr");
             }
 
-            check_aslr_only = true;
+            check_aslr = true;
         } else {
             assert_("Unrecognized option %s", argument);
         }
@@ -1094,9 +1080,12 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
                     assert_("Architecture at offset %.16lX is not valid", current_offset);
                 }
 
-                if (display_archs_only) {
+                if (display_archs) {
                     architectures.push_back(archInfo);
-                    continue;
+
+                    if (!check_aslr) {
+                        continue;
+                    }
                 }
 
                 auto it = default_architectures.end();
@@ -1166,7 +1155,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
                     assert_("Architecture at offset %.8lX is not valid", current_offset);
                 }
 
-                if (display_archs_only) {
+                if (display_archs) {
                     architectures.push_back(archInfo);
                     continue;
                 }
@@ -1233,9 +1222,9 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
                 }
 
                 if (uses_application) {
-                    notice("Application (%s) does not contain multiple architectures, but the executable is of type \"%s\", so ASLR removal will commence", name, archInfo->name);
+                    notice("Application (%s) does not contain multiple architectures, but the executable is of type \"%s\", so program execution will commence", name, archInfo->name);
                 } else {
-                    notice("File (%s) does not contain multiple architectures, but the executable is of type \"%s\", so ASLR removal will commence", name, archInfo->name);
+                    notice("File (%s) does not contain multiple architectures, but the executable is of type \"%s\", so program execution will commence", name, archInfo->name);
                 }
 
                 break;
@@ -1255,7 +1244,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
         headers.emplace(0x0, header);
     }
 
-    if (display_archs_only) {
+    if (display_archs) {
         auto size = architectures.size();
         if (size) {
             if (uses_application) {
@@ -1264,8 +1253,20 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
                 fprintf(stdout, "File (%s) contains %ld architectures:\n", name, size);
             }
 
+            int i = 0;
             for (const NXArchInfo *archInfo : architectures) {
-                fprintf(stdout, "%s\n", archInfo->name);
+                fprintf(stdout, "%s", archInfo->name);
+                if (check_aslr) {
+                    bool aslr = has_aslr(headers[i]);
+                    fprintf(stdout, " (%s", aslr ? "contains ASLR" : "does not contain ASLR");
+
+                    if (aslr && archInfo->cputype == CPU_TYPE_ARM64) {
+                        fprintf(stdout, ", removing it can cause crashes");
+                    }
+
+                    fprintf(stdout, ")\n");
+                    i++;
+                }
             }
         } else {
             if (uses_application) {
@@ -1278,7 +1279,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
         return 0;
     }
 
-    if (check_aslr_only) {
+    if (check_aslr) {
         for (const auto& item : headers) {
             struct mach_header header = item.second;
 
@@ -1288,7 +1289,12 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
             const NXArchInfo *archInfo = NXGetArchInfoFromCpuType(cputype, cpusubtype);
             bool aslr = has_aslr(header);
 
-            fprintf(stdout, "Architecture (%s) %s ASLR", archInfo->name, (aslr ? "contains" : "does not contain"));
+            if (headers.size() > 1) {
+                fprintf(stdout, "Architecture (%s) %s ASLR", archInfo->name, (aslr ? "contains" : "does not contain"));
+            } else {
+                fprintf(stdout, "Application (%s) %s ASLR", name, (aslr ? "contains" : "does not contain"));
+            }
+
             if (aslr && cputype == CPU_TYPE_ARM64) {
                 fprintf(stdout, " (Removing ASLR can cause crashes)");
             }
