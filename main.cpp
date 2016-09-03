@@ -70,14 +70,14 @@ static inline int32_t swap(uint32_t magic, int32_t value) noexcept {
     return static_cast<int32_t>(swap(magic, static_cast<uint32_t>(value)));
 }
 
-__attribute__((unused)) static inline int64_t swap(uint32_t magic, int64_t value) {
+__attribute__((unused)) static inline int64_t swap(uint32_t magic, int64_t value) noexcept {
     return static_cast<int64_t>(swap(magic, static_cast<uint64_t>(value)));
 }
 
 static bool is_ios = false;
 
 namespace std {
-    auto is_in_map = [](std::vector<std::map<const char *, std::string>> vector, std::string value) {
+    auto is_in_map = [](std::vector<std::map<const char *, std::string>> vector, std::string value) noexcept {
         for (const auto& item : vector) {
             for (const auto& item_ : item) {
                 if (item_.second == value) {
@@ -99,56 +99,167 @@ namespace std {
         return string.substr(pos + 1);
     };
 
-    auto print_vector = [](const std::vector<std::map<const char *, std::string>>& vector, bool use_listing = false) noexcept {
+    auto print_vector = [](std::vector<std::map<const char *, std::string>>& vector, bool use_listing = false) noexcept {
+        auto sorted_vector = std::vector<std::map<const char *, std::string>>();
+        std::string first_name;
+
+        for (auto& information : vector) {
+            auto information_ = information;
+
+            std::string name = information_["containerName"];
+            if (name.empty() || std::is_in_map(sorted_vector, name)) {
+                name = information_["displayName"];
+                if (name.empty() || std::is_in_map(sorted_vector, name)) {
+                    name = information_["executableName"];
+                    if (!use_listing) {
+                        information_["displayName"] = "";
+                        information_["containerName"] = "";
+                    }
+                } else if (!use_listing) {
+                    information_["executableName"] = "";
+                    information_["containerName"] = "";
+                }
+            } else if (!use_listing) {
+                information_["displayName"] = "";
+                information_["executableName"] = "";
+            }
+
+            sorted_vector.push_back(information);
+        }
+
+        std::sort(sorted_vector.begin(), sorted_vector.end(), [](std::map<const char *, std::string>& first, std::map<const char *, std::string>& second) {
+            std::string first_name = first["containerName"];
+            if (first_name.empty()) {
+                first_name = first["displayName"];
+                if (first_name.empty()) {
+                    first_name = first["executableName"];
+                    if (first_name.empty()) {
+                        return false;
+                    }
+                }
+            }
+
+            std::string second_name = second["containerName"];
+            if (second_name.empty()) {
+                second_name = second["displayName"];
+                if (second_name.empty()) {
+                    second_name = second["executableName"];
+                    if (second_name.empty()) {
+                        return false;
+                    }
+                }
+            }
+
+            auto length = std::min(first_name.length(), second_name.length());
+            for (auto i = 0; i < length; i++) {
+                char fc = tolower(first_name[i]);
+                char sc = tolower(second_name[i]);
+
+                if (fc == sc) {
+                    continue;
+                }
+
+                return fc < sc;
+            }
+
+            fprintf(stdout, "called here!\"%s\" - \"%s\"\n", first_name.c_str(), second_name.c_str());
+            return first_name.size() < second_name.size();
+        });
+
         if (use_listing) {
-            int i = 1;
-            for (const auto& information : vector) {
+            auto max_container_size = 0;
+            auto max_display_size = 0;
+            auto max_executable_name_size = 0;
+
+            for (auto& information : sorted_vector) {
+                if (!is_ios) {
+                    auto container_length = information["containerName"].length();
+                    if (max_container_size < container_length) {
+                        max_container_size = container_length;
+                    }
+                }
+
+                auto display_length = information["displayName"].length();
+                if (max_display_size < display_length) {
+                    max_display_size = display_length;
+                }
+
+                auto executable_length = information["executableName"].length();
+                if (max_executable_name_size < executable_length) {
+                    max_executable_name_size = executable_length;
+                }
+            }
+
+            auto get_spaces = [](std::string::size_type length) {
+                std::string return_value;
+                return_value.resize(length, ' ');
+
+                return return_value;
+            };
+
+            std::string container_spaces;
+            if (!is_ios) {
+                container_spaces = get_spaces(max_container_size + 1);
+            }
+
+            std::string display_spaces = get_spaces(max_display_size + 1);
+            std::string executable_spaces = get_spaces(max_executable_name_size + 1);
+
+            auto get_size = [](size_t size) {
+                //fprintf(stdout, "size is %ld\n", size);
+
+                auto length = 0;
+                double size_ = size;
+
+                while (size_ / 10 >= 1) {
+                    size_ /= 10;
+                    length++;
+                }
+
+                length++;
+
+                //fprintf(stdout, "Length is %d\n", length);
+                return length;
+            };
+
+            auto i = 0;
+            auto size_spaces = get_spaces(get_size(sorted_vector.size()));
+
+            for (auto& information : sorted_vector) {
                 if (is_ios) {
-                    fprintf(stdout, "%d. Application (Display Name: \"%s\", Executable Name: \"%s\", Bundle Identifier: \"%s\")\n", i, information.at("displayName").c_str(), information.at("executableName").c_str(), information.at("bundleIdentifier").c_str());
+                    fprintf(stdout, "%d. %sApplication (Display Name: \"%s\",%sExecutable Name: \"%s\",%sBundle Identifier: \"%s\")\n", i, &size_spaces[get_size(i)], information["displayName"].c_str(), &display_spaces[information["displayName"].length()], information["executableName"].c_str(), &executable_spaces[information["executableName"].length()], information["bundleIdentifier"].c_str());
                 } else {
-                    fprintf(stdout, "%d. Application (Container Name: \"%s\", Display Name: \"%s\", Executable Name: \"%s\", Bundle Identifier: \"%s\")\n", i, information.at("containerName").c_str(), information.at("displayName").c_str(), information.at("executableName").c_str(), information.at("bundleIdentifier").c_str());
+                    fprintf(stdout, "%d. %sApplication (Container Name: \"%s\",%sDisplay Name: \"%s\",%sExecutable Name: \"%s\",%sBundle Identifier: \"%s\")\n", i, &size_spaces[get_size(i)], information["containerName"].c_str(), &container_spaces[information["containerName"].length()], information["displayName"].c_str(), &display_spaces[information["displayName"].length()], information["executableName"].c_str(), &executable_spaces[information["executableName"].length()], information["bundleIdentifier"].c_str());
                 }
 
                 i++;
             }
         } else {
-            auto string_vector = std::vector<std::string>();
-            for (const auto& information : vector) {
-                std::string name = information.at("containerName");
+            auto front = sorted_vector.front();
+
+            std::string name = front["containerName"];
+            if (name.empty()) {
+                name = front["displayName"];
                 if (name.empty()) {
-                    name = information.at("displayName");
+                    name = front["executableName"];
+                }
+            }
+
+            fprintf(stdout, "%s", name.c_str());
+            sorted_vector.erase(sorted_vector.begin());
+
+            for (auto& information : sorted_vector) {
+                name = information["containerName"];
+                if (name.empty()) {
+                    name = information["displayName"];
                     if (name.empty()) {
-                        name = information.at("executableName");
+                        name = information["executableName"];
                         if (name.empty()) {
                             continue;
                         }
                     }
                 }
 
-                string_vector.push_back(name);
-            }
-
-            std::sort(string_vector.begin(), string_vector.end(), [](const std::string& first, const std::string& second) {
-                auto length = std::min(first.length(), second.length());
-                for (auto i = 0; i < length; i++) {
-                    char fc = tolower(first[i]);
-                    char sc = tolower(second[i]);
-
-                    if (fc == sc) {
-                        continue;
-                    }
-
-                    return fc < sc;
-                }
-
-                return true;
-            });
-
-            auto front = string_vector.front();
-            string_vector.erase(string_vector.begin());
-
-            fprintf(stdout, "%s", front.c_str());
-            for (const auto& name : string_vector) {
                 fprintf(stdout, ", %s", name.c_str());
             }
 
@@ -199,7 +310,7 @@ static CFArrayRef (*SBSCopyApplicationDisplayIdentifiers)(bool onlyActive, bool 
 static CFStringRef (*SBSCopyLocalizedApplicationNameForDisplayIdentifier)(CFStringRef bundle_id) = nullptr;
 static CFStringRef (*SBSCopyExecutablePathForDisplayIdentifier)(CFStringRef bundle_id) = nullptr;
 
-void print_usage() {
+void print_usage() noexcept {
     fprintf(stdout, "Usage: rmaslr -a application\n");
     fprintf(stdout, "Options:\n");
     fprintf(stdout, "    -a,     --app/--application,   Remove ASLR for an application\n");
@@ -214,7 +325,7 @@ void print_usage() {
     exit(0);
 }
 
-int main(int argc, const char * argv[], const char * envp[]) {
+int main(int argc, const char * argv[], const char * envp[]) noexcept {
     if (argc < 2) {
         print_usage();
     }
@@ -352,7 +463,7 @@ int main(int argc, const char * argv[], const char * envp[]) {
             CFStringRef identifier = (CFStringRef)CFDictionaryGetValue(info, identifierKey);
             if (identifier) {
                 if (CFGetTypeID(identifier) == CFStringGetTypeID()) {
-                    information["bundleIdentifier"] = CFStringGetCStringPtr(identifierKey, kCFStringEncodingUTF8);
+                    information["bundleIdentifier"] = CFStringGetCStringPtr(identifier, kCFStringEncodingUTF8);
                 }
             }
         }
