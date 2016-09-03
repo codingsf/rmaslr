@@ -206,12 +206,12 @@ namespace std {
                 auto length = 0;
                 double size_ = size;
 
-                while (size_ / 10 >= 1) {
+                do {
                     size_ /= 10;
                     length++;
-                }
+                } while (size_ / 10 >= 1);
 
-                return length++;
+                return length;
             };
 
             auto i = 1;
@@ -298,7 +298,138 @@ namespace Environment {
     static std::string CurrentDirectory = GetCurrentDirectory();
 }
 
+namespace rmaslr {
+    template <typename T>
+    T RequestInput(std::string question, std::vector<T> values = std::vector<T>()) {
+        T input;
+
+        auto is_valid = [&values](T input) {
+            if (!values.size()) {
+                return true;
+            }
+
+            for (const auto& value : values) {
+                if (input != value) {
+                    continue;
+                }
+
+                return true;
+            }
+
+            return false;
+        };
+
+        do {
+            std::cout << question;
+            std::cin >> input;
+        } while (!is_valid(input));
+
+        return input;
+    }
+
+    class file {
+    public:
+        file(const char *path) : file_(fopen(path, "r+")) {
+
+        }
+
+        file(const char *path, const char *mode) : file_(fopen(path, mode)) {
+            if (!file_) {
+                error("rmaslr::file() - Unable to open file at path (\"%s\"), with mode (\"%s\") (fopen(path, mode) failed), errno=%d(%s)", path, mode, errno, strerror(errno));
+            }
+
+            if (::stat(path, &sbuf_) != 0) {
+                error("rmaslr::file() - Unable to gather information on file at path (\"%s\"), errno=%d(%s)", path, errno, strerror(errno));
+            }
+        }
+
+        file(FILE *file) : file_(file) {
+            if (!file) {
+                error("rmaslr::file() : file is null");
+            }
+
+            position_ = ftell(file_);
+        }
+
+        ~file() noexcept {
+            fclose(file_);
+        }
+
+        inline long position() const noexcept {
+            return position_;
+        }
+
+        enum class seek_type {
+            origin,
+            current,
+            end
+        };
+
+        void seek(long position, seek_type seek) noexcept {
+            switch (seek) {
+            case seek_type::origin:
+                if (sbuf_.st_size < position) {
+                    error("file::seek() - Cannot seek past end of file (position=%ld, size=%lld)", position, sbuf_.st_size);
+                }
+
+                position_ = position;
+                break;
+            case seek_type::current:
+                if ((sbuf_.st_size - position_) < position) {
+                    error("file::seek() - Cannot seek past end of file (position=%ld, size=%lld)", position, sbuf_.st_size);
+                }
+
+                position_ += position;
+                break;
+            case seek_type::end:
+                if (sbuf_.st_size < position) {
+                    error("file::seek() - Cannot seek past end of file (position=%ld, size=%lld)", position, sbuf_.st_size);
+                }
+
+                position_ = sbuf_.st_size - position;
+                break;
+            }
+
+            if (fseek(file_, position, (int)seek) != 0) {
+                error("file::seek() - Unable to seek to position (%ld), (fseek(file_, position, (int)seek) failed), errno=%d(%s)", position, errno, strerror(errno));
+            }
+        }
+
+        template<typename T>
+        T read() noexcept {
+            T *buffer = static_cast<T *>(malloc(sizeof(T)));
+            if (!buffer) {
+                error("file::read() - Unable to allocate buffer needed to read data of size %ld, errno=%d(%s)", sizeof(T), errno, strerror(errno));
+            }
+
+            if (fread(buffer, sizeof(T), 1, file_) != 1) {
+                error("file::read() - Unable to read from file at offset %.16lX, errno=%d(%s)", position_, errno, strerror(errno));
+            }
+
+            position_ += sizeof(T);
+            return *buffer;
+        }
+
+        template <typename T>
+        void write(T buff) noexcept {
+            if (fwrite(file_, sizeof(T), 1, file_) != 1) {
+                error("file::write() - Unable to write to file at position (%ld), errno=%d(%s)", position_, errno, strerror(errno));
+            }
+        }
+
+        inline struct stat stat() const noexcept {
+            return sbuf_;
+        }
+    private:
+        FILE *file_ = nullptr;
+        long position_ = 0x0;
+
+        struct stat sbuf_ = {};
+    };
+}
+
 static CFArrayRef (*SBSCopyApplicationDisplayIdentifiers)(bool onlyActive, bool debugging) = nullptr;
+
 static CFStringRef (*SBSCopyLocalizedApplicationNameForDisplayIdentifier)(CFStringRef bundle_id) = nullptr;
 static CFStringRef (*SBSCopyExecutablePathForDisplayIdentifier)(CFStringRef bundle_id) = nullptr;
 
@@ -504,11 +635,19 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
                 assert_("Unable to retrieve application-list");
             }
 
-            CFIndex applications_count = CFArrayGetCount(applications_);
-            for (CFIndex i = 0; i < applications_count; i++) {
+            auto size = CFArrayGetCount(applications_);
+            for (CFIndex i = 0; i < size; i++) {
                 CFStringRef bundle_id = (CFStringRef)CFArrayGetValueAtIndex(applications_, i);
+                if (!bundle_id) {
+                    continue;
+                }
 
-                const char *displayName = CFStringGetCStringPtr(SBSCopyLocalizedApplicationNameForDisplayIdentifier(bundle_id), kCFStringEncodingUTF8);
+                CFStringRef display_name = SBSCopyLocalizedApplicationNameForDisplayIdentifier(bundle_id);
+                if (!display_name) {
+                    continue;
+                }
+
+                const char *displayName = CFStringGetCStringPtr(display_name, kCFStringEncodingUTF8);
                 const char *bundleIdentifier = "";
 
                 const char *executablePath = "";
@@ -604,8 +743,8 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
                     assert_("Unable to retrieve application-list");
                 }
 
-                CFIndex count = CFArrayGetCount(apps);
-                for (CFIndex i = 0; i < count; i++) {
+                auto size = CFArrayGetCount(apps);
+                for (CFIndex i = 0; i < size; i++) {
                     if (binary_path) {
                         binary_path = nullptr;
                     }
@@ -912,24 +1051,8 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
         assert_("Unable to get path");
     }
 
-    FILE *file = fopen(binary_path, "r+");
-    if (!file) {
-        bool is_root = geteuid() == 0;
-        if (uses_application) {
-            assert_("Unable to open application (%s)'s executable%s", name, (is_root) ? "" : ". Trying running rmaslr as root");
-        }
-
-        assert_("Unable to open file at path %s%s", name, (is_root) ? "" : ". Trying running rmaslr as root");
-    }
-
-    struct stat sbuf;
-    if (stat(binary_path, &sbuf) != 0) {
-        if (uses_application) {
-            assert_("Unable to get information on application (%s)'s executable", name);
-        }
-
-        assert_("Unable to get information on file at path (%s)", name);
-    }
+    rmaslr::file file(binary_path, "r+");
+    struct stat sbuf = file.stat();
 
     if (sbuf.st_size < sizeof(struct mach_header_64)) {
         if (uses_application) {
@@ -939,11 +1062,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
         assert_("File (%s) is not a valid mach-o", name);
     }
 
-    uint32_t magic;
-
-    fseek(file, 0x0, SEEK_SET);
-    fread(&magic, sizeof(uint32_t), 1, file);
-
+    uint32_t magic = file.read<uint32_t>();
     bool is_fat = false;
 
     switch (magic) {
@@ -1003,7 +1122,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
             //use std::string and std::cin for safety instead of a risky char* and scanf()
             std::string result;
 
-            while (!is_valid) {
+            do {
                 if (uses_application) {
                     fprintf(stdout, "Removing ASLR on a 64-bit arm application (%s) can result in it crashing. Are you sure you want to continue (y/n): ", name);
                 } else {
@@ -1014,7 +1133,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
 
                 can_continue = result == "y" || result == "Y";
                 is_valid = can_continue || (result == "n" || result == "N");
-            }
+            } while (!is_valid);
 
             if (!can_continue) {
                 return false;
@@ -1024,10 +1143,8 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
         flags &= ~MH_PIE;
         header.flags = swap(header.magic, flags);
 
-        fseek(file, offset, SEEK_SET);
-        if (fwrite(&header, sizeof(struct mach_header), 1, file) != 1) {
-            error("There was an error writing to file, at-offset %.8lX, errno=%d (%s)", offset, errno, strerror(errno));
-        }
+        file.seek(offset, rmaslr::file::seek_type::origin);
+        file.write<struct mach_header>(header);
 
         if (archInfo) {
             fprintf(stdout, "Removed ASLR for architecture \"%s\"\n", archInfo->name);
@@ -1042,10 +1159,8 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
     auto headers = std::map<long, struct mach_header>();
 
     if (is_fat) {
-        struct fat_header fat;
-
-        fseek(file, 0x0, SEEK_SET);
-        fread(&fat, sizeof(struct fat_header), 1, file);
+        file.seek(0x0, rmaslr::file::seek_type::origin);
+        struct fat_header fat = file.read<struct fat_header>();
 
         uint32_t architectures_count = swap(magic, fat.nfat_arch);
         if (!architectures_count) {
@@ -1065,17 +1180,16 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
                 assert_("File (%s) is too small to contain %d architectures", name, architectures_count);
             }
 
-            long current_offset = ftell(file);
+            long current_offset = file.position();
             for (uint32_t i = 0; i < architectures_count; i++) {
-                struct fat_arch_64 arch;
-                fread(&arch, sizeof(struct fat_arch_64), 1, file);
+                struct fat_arch_64 arch = file.read<struct fat_arch_64>();
 
                 current_offset += sizeof(struct fat_arch_64);
                 long header_offset = static_cast<long>(swap(magic, arch.offset));
 
                 const NXArchInfo *archInfo = NXGetArchInfoFromCpuType(swap(magic, arch.cputype), swap(magic, arch.cpusubtype));
                 if (!archInfo) {
-                    assert_("Architecture at offset %.16lX is not valid", current_offset);
+                    assert_("Architecture at offset 0x%.16lX is not valid", current_offset);
                 }
 
                 if (display_archs) {
@@ -1123,13 +1237,11 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
                     assert_("File (%s) architecture #%d is placed past end of file", name, i + 1);
                 }
 
-                struct mach_header header;
-
-                fseek(file, header_offset, SEEK_SET);
-                fread(&header, sizeof(struct mach_header), 1, file);
+                file.seek(header_offset, rmaslr::file::seek_type::origin);
+                struct mach_header header = file.read<struct mach_header>();;
 
                 headers.emplace(header_offset, header);
-                fseek(file, current_offset, SEEK_SET);
+                file.seek(current_offset, rmaslr::file::seek_type::origin);
             }
         } else {
             if (architectures_count * sizeof(struct fat_arch) > sbuf.st_size) {
@@ -1140,18 +1252,17 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
                 assert_("File (%s) is too small to contain %d architectures", name, architectures_count);
             }
 
-            long current_offset = ftell(file);
+            long current_offset = file.position();
             for (uint32_t i = 0; i < architectures_count; i++) {
-                struct fat_arch arch;
-                fread(&arch, sizeof(struct fat_arch), 1, file);
-
-                current_offset += sizeof(struct fat_arch);
+                struct fat_arch arch = file.read<struct fat_arch>();
                 long header_offset = static_cast<long>(swap(magic, arch.offset));
 
                 const NXArchInfo *archInfo = NXGetArchInfoFromCpuType(swap(magic, arch.cputype), swap(magic, arch.cpusubtype));
                 if (!archInfo) {
-                    assert_("Architecture at offset %.8lX is not valid", current_offset);
+                    assert_("Architecture at offset 0x%.8lX is not valid", current_offset);
                 }
+
+                current_offset += sizeof(struct fat_arch);
 
                 if (display_archs) {
                     architectures.push_back(archInfo);
@@ -1198,20 +1309,16 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
                     assert_("File (%s) architecture #%d is placed past end of file", name, i + 1);
                 }
 
-                struct mach_header header;
-
-                fseek(file, header_offset, SEEK_SET);
-                fread(&header, sizeof(struct mach_header), 1, file);
+                file.seek(header_offset, rmaslr::file::seek_type::origin);
+                struct mach_header header = file.read<struct mach_header>();
 
                 headers.emplace(header_offset, header);
-                fseek(file, current_offset, SEEK_SET);
+                file.seek(current_offset, rmaslr::file::seek_type::origin);
             }
         }
     } else {
-        struct mach_header header;
-
-        fseek(file, 0x0, SEEK_SET);
-        fread(&header, sizeof(struct mach_header), 1, file);
+        file.seek(0x0, rmaslr::file::seek_type::origin);
+        struct mach_header header = file.read<struct mach_header>();
 
         auto it = default_architectures.end();
         if (default_architectures.size()) {
@@ -1367,6 +1474,4 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
 
         assert_("Unable to find & remove ASLR from architecture(s) \"%s\"", architectures);
     }
-
-    fclose(file);
 }
