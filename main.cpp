@@ -206,8 +206,6 @@ namespace std {
             std::string executable_spaces = get_spaces(max_executable_name_size + 1);
 
             auto get_size = [](size_t size) {
-                //fprintf(stdout, "size is %ld\n", size);
-
                 auto length = 0;
                 double size_ = size;
 
@@ -216,10 +214,7 @@ namespace std {
                     length++;
                 }
 
-                length++;
-
-                //fprintf(stdout, "Length is %d\n", length);
-                return length;
+                return length++;
             };
 
             auto i = 0;
@@ -635,11 +630,11 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
                     }
 
                     const char *name_ = display_name;
-                    if (!strlen(name_) || strcmp(name_, app_name)) {
-                        name_ = executable_name;
-                        if (!strlen(name_) || strcmp(name_, app_name)) {
-                            name_ = bundle_id_;
-                            if (!strlen(name_) || strcmp(name_, app_name)) {
+                    if (!strlen(name_) || strcmp(name_, app_name) != 0) {
+                        name_ = bundle_id_;
+                        if (!strlen(name_) || strcmp(name_, app_name) != 0) {
+                            name_ = executable_name;
+                            if (!strlen(name_) || strcmp(name_, app_name) != 0) {
                                 continue;
                             }
                         }
@@ -677,9 +672,12 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
                     if (name.empty() || name != app_name) {
                         name = information["displayName"];
                         if (name.empty() || name != app_name) {
-                            name = information["executableName"];
+                            name = information["bundleIdentifier"];
                             if (name.empty() || name != app_name) {
-                                continue;
+                                name = information["executableName"];
+                                if (name.empty() || name != app_name) {
+                                    continue;
+                                }
                             }
                         }
                     }
@@ -695,14 +693,66 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
             if (applications_found.size() > 1) {
                 fprintf(stdout, "Multiple Applications with name (\"%s\") have been found:\n", app_name);
 
-                int i = 1;
+                auto max_container_size = 0;
+                auto max_display_size = 0;
+                auto max_executable_name_size = 0;
+
+                for (auto& information : applications_found) {
+                    if (!is_ios) {
+                        auto container_length = information["containerName"].length();
+                        if (max_container_size < container_length) {
+                            max_container_size = container_length;
+                        }
+                    }
+
+                    auto display_length = information["displayName"].length();
+                    if (max_display_size < display_length) {
+                        max_display_size = display_length;
+                    }
+
+                    auto executable_length = information["executableName"].length();
+                    if (max_executable_name_size < executable_length) {
+                        max_executable_name_size = executable_length;
+                    }
+                }
+
+                auto get_spaces = [](std::string::size_type length) {
+                    std::string return_value;
+                    return_value.resize(length, ' ');
+
+                    return return_value;
+                };
+
+                std::string container_spaces;
+                if (!is_ios) {
+                    container_spaces = get_spaces(max_container_size + 1);
+                }
+
+                std::string display_spaces = get_spaces(max_display_size + 1);
+                std::string executable_spaces = get_spaces(max_executable_name_size + 1);
+
+                auto get_size = [](size_t size) {
+                    auto length = 0;
+                    double size_ = size;
+
+                    while (size_ / 10 >= 1) {
+                        size_ /= 10;
+                        length++;
+                    }
+
+                    return length++;
+                };
+
+                auto i = 0;
+                auto size_spaces = get_spaces(get_size(applications_found.size()));
+
                 for (auto iter = applications_found.begin(); iter != applications_found.end(); iter++) {
                     auto information = *iter;
 
                     if (is_ios) {
-                        fprintf(stdout, "%d. Application (Display Name: \"%s\", Executable Name: \"%s\")\n", i, information["displayName"].c_str(), information["executableName"].c_str());
+                        fprintf(stdout, "%d. %sApplication (Display Name: \"%s\",%sExecutable Name: \"%s\",%sBundle Identifier: \"%s\")\n", i, &size_spaces[get_size(i)], information["displayName"].c_str(), &display_spaces[information["displayName"].length()], information["executableName"].c_str(), &executable_spaces[information["executableName"].length()], information["bundleIdentifier"].c_str());
                     } else {
-                        fprintf(stdout, "%d. Application (Container Name: \"%s\", Display Name: \"%s\", Executable Name: \"%s\")\n", i, information["containerName"].c_str(), information["displayName"].c_str(), information["executableName"].c_str());
+                        fprintf(stdout, "%d. %sApplication (Container Name: \"%s\",%sDisplay Name: \"%s\",%sExecutable Name: \"%s\",%sBundle Identifier: \"%s\")\n", i, &size_spaces[get_size(i)], information["containerName"].c_str(), &container_spaces[information["containerName"].length()], information["displayName"].c_str(), &display_spaces[information["displayName"].length()], information["executableName"].c_str(), &executable_spaces[information["executableName"].length()], information["bundleIdentifier"].c_str());
                     }
 
                     i++;
@@ -732,6 +782,8 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
                     name = strdup(displayName.c_str());
                 } else if (!std::is_in_map(applications_found, executableName)) {
                     name = strdup(executableName.c_str());
+                } else {
+                    name = app_name;
                 }
             } else {
                 auto application_information = applications_found.front();
