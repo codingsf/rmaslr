@@ -6,7 +6,9 @@
 //  Copyright © 2016 iNoahDev. All rights reserved.
 //
 
+#include <cstdarg>
 #include <cstddef>
+
 #include <iostream>
 #include <map>
 #include <string>
@@ -47,221 +49,8 @@ struct fat_arch_64 {
 #define log(str, ...)
 #endif
 
-static uint32_t swap(uint32_t magic, uint32_t value) noexcept {
-    if (magic == MH_CIGAM || magic == MH_CIGAM_64 || magic == FAT_CIGAM || magic == FAT_CIGAM_64) {
-        value = ((value >> 8) & 0x00ff00ff) | ((value << 8) & 0xff00ff00);
-        value = ((value >> 16) & 0x0000ffff) | ((value << 16) & 0xffff0000);
-    }
-
-    return value;
-}
-
-static uint64_t swap(uint32_t magic, uint64_t value) noexcept {
-    if (magic == MH_CIGAM || magic == MH_CIGAM_64 || magic == FAT_CIGAM || magic == FAT_CIGAM_64) {
-        value = (value & 0x00000000ffffffff) << 32 | (value & 0xffffffff00000000) >> 32;
-        value = (value & 0x0000ffff0000ffff) << 16 | (value & 0xffff0000ffff0000) >> 16;
-        value = (value & 0x00ff00ff00ff0ff) << 8  | (value & 0xff00ff00ff00ff00) >> 8;
-    }
-
-    return value;
-}
-
-static inline int32_t swap(uint32_t magic, int32_t value) noexcept {
-    return static_cast<int32_t>(swap(magic, static_cast<uint32_t>(value)));
-}
-
-__attribute__((unused)) static inline int64_t swap(uint32_t magic, int64_t value) noexcept {
-    return static_cast<int64_t>(swap(magic, static_cast<uint64_t>(value)));
-}
-
-static bool is_ios = false;
-
-namespace std {
-    auto is_in_map = [](std::vector<std::map<const char *, std::string>> vector, std::string value) noexcept {
-        for (const auto& item : vector) {
-            for (const auto& item_ : item) {
-                if (item_.second == value) {
-                    return true;
-                }
-            }
-        }
-
-        return false;
-    };
-
-    auto find_last_component = [](const std::string& string) noexcept {
-        auto pos = string.find_last_of('/');
-        if (pos == std::string::npos || pos == string.length()) {
-            //must specify std::string since compiler thinks we're using const char*
-            return std::string("");
-        }
-
-        return string.substr(pos + 1);
-    };
-
-    auto print_vector = [](std::vector<std::map<const char *, std::string>>& vector, bool use_listing = false) noexcept {
-        auto sorted_vector = std::vector<std::map<const char *, std::string>>();
-        std::string first_name;
-
-        for (auto& information : vector) {
-            auto information_ = information;
-
-            std::string name = information_["containerName"];
-            if (name.empty() || std::is_in_map(sorted_vector, name)) {
-                name = information_["displayName"];
-                if (name.empty() || std::is_in_map(sorted_vector, name)) {
-                    name = information_["executableName"];
-                    if (!use_listing) {
-                        information_["displayName"] = "";
-                        information_["containerName"] = "";
-                    }
-                } else if (!use_listing) {
-                    information_["executableName"] = "";
-                    information_["containerName"] = "";
-                }
-            } else if (!use_listing) {
-                information_["displayName"] = "";
-                information_["executableName"] = "";
-            }
-
-            sorted_vector.push_back(information);
-        }
-
-        std::sort(sorted_vector.begin(), sorted_vector.end(), [](std::map<const char *, std::string>& first, std::map<const char *, std::string>& second) {
-            std::string first_name = first["containerName"];
-            if (first_name.empty()) {
-                first_name = first["displayName"];
-                if (first_name.empty()) {
-                    first_name = first["executableName"];
-                    if (first_name.empty()) {
-                        return false;
-                    }
-                }
-            }
-
-            std::string second_name = second["containerName"];
-            if (second_name.empty()) {
-                second_name = second["displayName"];
-                if (second_name.empty()) {
-                    second_name = second["executableName"];
-                    if (second_name.empty()) {
-                        return false;
-                    }
-                }
-            }
-
-            auto length = std::min(first_name.length(), second_name.length());
-            for (auto i = 0; i < length; i++) {
-                char fc = tolower(first_name[i]);
-                char sc = tolower(second_name[i]);
-
-                if (fc == sc) {
-                    continue;
-                }
-
-                return fc < sc;
-            }
-
-            return first_name.size() < second_name.size();
-        });
-
-        if (use_listing) {
-            auto max_container_size = 0;
-            auto max_display_size = 0;
-            auto max_executable_name_size = 0;
-
-            for (auto& information : sorted_vector) {
-                if (!is_ios) {
-                    auto container_length = information["containerName"].length();
-                    if (max_container_size < container_length) {
-                        max_container_size = container_length;
-                    }
-                }
-
-                auto display_length = information["displayName"].length();
-                if (max_display_size < display_length) {
-                    max_display_size = display_length;
-                }
-
-                auto executable_length = information["executableName"].length();
-                if (max_executable_name_size < executable_length) {
-                    max_executable_name_size = executable_length;
-                }
-            }
-
-            auto get_spaces = [](std::string::size_type length) {
-                auto return_value = std::string(length, ' ');
-                return return_value;
-            };
-
-            std::string container_spaces;
-            if (!is_ios) {
-                container_spaces = get_spaces(max_container_size + 1);
-            }
-
-            std::string display_spaces = get_spaces(max_display_size + 1);
-            std::string executable_spaces = get_spaces(max_executable_name_size + 1);
-
-            auto get_size = [](size_t size) {
-                auto length = 0;
-                double size_ = size;
-
-                do {
-                    size_ /= 10;
-                    length++;
-                } while (size_ / 10 >= 1);
-
-                return length;
-            };
-
-            auto i = 1;
-            auto size_spaces = get_spaces(get_size(sorted_vector.size()));
-
-            for (auto& information : sorted_vector) {
-                if (is_ios) {
-                    fprintf(stdout, "%d. %sApplication (Display Name: \"%s\",%sExecutable Name: \"%s\",%sBundle Identifier: \"%s\")\n", i, &size_spaces[get_size(i)], information["displayName"].c_str(), &display_spaces[information["displayName"].length()], information["executableName"].c_str(), &executable_spaces[information["executableName"].length()], information["bundleIdentifier"].c_str());
-                } else {
-                    fprintf(stdout, "%d. %sApplication (Container Name: \"%s\",%sDisplay Name: \"%s\",%sExecutable Name: \"%s\",%sBundle Identifier: \"%s\")\n", i, &size_spaces[get_size(i)], information["containerName"].c_str(), &container_spaces[information["containerName"].length()], information["displayName"].c_str(), &display_spaces[information["displayName"].length()], information["executableName"].c_str(), &executable_spaces[information["executableName"].length()], information["bundleIdentifier"].c_str());
-                }
-
-                i++;
-            }
-        } else {
-            auto front = sorted_vector.front();
-
-            std::string name = front["containerName"];
-            if (name.empty()) {
-                name = front["displayName"];
-                if (name.empty()) {
-                    name = front["executableName"];
-                }
-            }
-
-            fprintf(stdout, "%s", name.c_str());
-            sorted_vector.erase(sorted_vector.begin());
-
-            for (auto& information : sorted_vector) {
-                name = information["containerName"];
-                if (name.empty()) {
-                    name = information["displayName"];
-                    if (name.empty()) {
-                        name = information["executableName"];
-                        if (name.empty()) {
-                            continue;
-                        }
-                    }
-                }
-
-                fprintf(stdout, ", %s", name.c_str());
-            }
-
-            fprintf(stdout, "\n");
-        }
-    };
-}
-
-namespace Environment {
-    auto GetCurrentDirectory = []() noexcept {
+namespace environment {
+    auto get_current_directory = []() noexcept {
         size_t size = PATH_MAX;
         char *buf = new char[size];
 
@@ -295,12 +84,58 @@ namespace Environment {
         return buffer;
     };
 
-    static std::string CurrentDirectory = GetCurrentDirectory();
+    static std::string current_directory = get_current_directory();
+}
+
+namespace std {
+    auto is_in_map = [](std::vector<std::map<const char *, std::string>> vector, std::string value) noexcept {
+        for (const auto& item : vector) {
+            for (const auto& item_ : item) {
+                if (item_.second == value) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    };
+
+    auto find_last_component = [](const std::string& string) noexcept {
+        auto pos = string.find_last_of('/');
+        if (pos == std::string::npos) {
+            return std::string(string); //make a copy
+        }
+
+        if (pos == string.length()) {
+            return std::string("");
+        }
+
+        return string.substr(pos + 1);
+    };
+
+    auto case_compare = [](std::string first, std::string second) {
+        auto first_size = first.size();
+        auto second_size = second.size();
+
+        auto size = std::min(first_size, second_size);
+        for (auto i = 0; i < size; i++) {
+            char fc = tolower(first[i]);
+            char sc = tolower(first[i]);
+
+            if (fc == sc) {
+                continue;
+            }
+
+            return fc < sc;
+        }
+
+        return first_size < second_size;
+    };
 }
 
 namespace rmaslr {
     template <typename T>
-    T RequestInput(std::string question, std::vector<T> values = std::vector<T>()) {
+    T request_input(std::string question, std::vector<T> values = std::vector<T>()) {
         T input;
 
         auto is_valid = [&values](T input) {
@@ -327,6 +162,184 @@ namespace rmaslr {
         return input;
     }
 
+    template <typename T>
+    T request_input_ranged(std::string question, std::pair<T, T> range) {
+        T input;
+
+        auto is_valid = [&range](T input) {
+            return input >= range.first && input <= range.second;
+        };
+
+        do {
+            std::cout << question;
+            std::cin >> input;
+        } while (!is_valid(input));
+
+        return input;
+    }
+
+    static bool is_ios = false;
+
+    auto get_size = [](size_t size) {
+        auto length = 0;
+        double size_ = size;
+
+        while (size_ / 10 >= 1) {
+            size_ /= 10;
+            length++;
+        }
+
+        return length++;
+    };
+
+    static uint32_t swap(uint32_t magic, uint32_t value) noexcept {
+        if (magic == MH_CIGAM || magic == MH_CIGAM_64 || magic == FAT_CIGAM || magic == FAT_CIGAM_64) {
+            value = ((value >> 8) & 0x00ff00ff) | ((value << 8) & 0xff00ff00);
+            value = ((value >> 16) & 0x0000ffff) | ((value << 16) & 0xffff0000);
+        }
+
+        return value;
+    }
+
+    static uint64_t swap(uint32_t magic, uint64_t value) noexcept {
+        if (magic == MH_CIGAM || magic == MH_CIGAM_64 || magic == FAT_CIGAM || magic == FAT_CIGAM_64) {
+            value = (value & 0x00000000ffffffff) << 32 | (value & 0xffffffff00000000) >> 32;
+            value = (value & 0x0000ffff0000ffff) << 16 | (value & 0xffff0000ffff0000) >> 16;
+            value = (value & 0x00ff00ff00ff0ff) << 8  | (value & 0xff00ff00ff00ff00) >> 8;
+        }
+
+        return value;
+    }
+
+    static inline int32_t swap(uint32_t magic, int32_t value) noexcept {
+        return static_cast<int32_t>(rmaslr::swap(magic, static_cast<uint32_t>(value)));
+    }
+
+    __attribute__((unused)) static inline int64_t swap(uint32_t magic, int64_t value) noexcept {
+        return static_cast<int64_t>(rmaslr::swap(magic, static_cast<uint64_t>(value)));
+    }
+
+    __printflike(1, 2)
+    std::string formatted_string(const char *string, ...) {
+        va_list list;
+
+        va_start(list, string);
+        int size = vsnprintf(nullptr, 0, string, list);
+        va_end(list);
+
+        std::string formatted(size + 1, '\0'); //+ 1 for null-byte
+
+        va_start(list, string);
+        vsprintf(const_cast<char *>(formatted.data()), string, list);
+        va_end(list);
+
+        return formatted;
+    };
+
+    auto get_spaces = [](std::string::size_type length) {
+        return std::string(length, ' ');
+    };
+
+    auto parse_application_container = [](const std::string& path) {
+        std::string name = std::find_last_component(path);
+
+        auto information = std::map<const char *, std::string>();
+        auto pos = name.find(".app");
+
+        if (pos == std::string::npos) {
+            return information;
+        }
+
+        if (pos == 0 || pos != (name.length() - (sizeof(".app") - 1))) {
+            return information;
+        }
+
+        std::string infoPath = path + "/Contents/Info.plist";
+        if (access(infoPath.c_str(), F_OK) != 0) {
+            return information;
+        }
+
+        CFStringRef pathString = CFStringCreateWithCString(kCFAllocatorDefault, infoPath.c_str(), kCFStringEncodingUTF8);
+        if (!pathString) {
+            return information;
+        }
+
+        CFURLRef pathURL = CFURLCreateWithFileSystemPath(kCFAllocatorDefault, pathString, kCFURLPOSIXPathStyle, false);
+        if (!pathString) {
+            return information;
+        }
+
+        CFReadStreamRef pathStream = CFReadStreamCreateWithFile(kCFAllocatorDefault, pathURL);
+        if (!pathStream) {
+            return information;
+        }
+
+        CFReadStreamOpen(pathStream);
+
+        CFErrorRef pathError = nullptr;
+        CFPropertyListRef pathPlist = CFPropertyListCreateWithStream(kCFAllocatorDefault, pathStream, 0, kCFPropertyListImmutable, nullptr, &pathError);
+
+        if (pathError) {
+            return information;
+        }
+
+        if (!pathPlist) {
+            return information;
+        }
+
+        if (CFGetTypeID(pathPlist) != CFDictionaryGetTypeID()) {
+            return information;
+        }
+
+        information = {
+            { "bundleIdentifier", "" },
+            { "containerName", name.substr(0, pos) },
+            { "displayName", "" },
+            { "executableName", "" },
+            { "executablePath", ""}
+        };
+
+        CFStringRef applicationKey = CFStringCreateWithCString(kCFAllocatorDefault, "CFBundleName", kCFStringEncodingUTF8);
+        CFStringRef identifierKey = CFStringCreateWithCString(kCFAllocatorDefault, "CFBundleIdentifier", kCFStringEncodingUTF8);
+        CFStringRef executableKey = CFStringCreateWithCString(kCFAllocatorDefault, "CFBundleExecutable", kCFStringEncodingUTF8);
+
+        CFDictionaryRef info = (CFDictionaryRef)pathPlist;
+        if (CFDictionaryContainsKey(info, executableKey)) {
+            CFStringRef executableName = (CFStringRef)CFDictionaryGetValue(info, executableKey);
+            if (executableName) {
+                if (CFGetTypeID(executableName) == CFStringGetTypeID()) {
+                    const char *executable_name = CFStringGetCStringPtr(executableName, kCFStringEncodingUTF8);
+                    information["executableName"] = executable_name;
+
+                    std::string executablePath = path + "/Contents/MacOS/";
+                    executablePath += executable_name;
+
+                    information["executablePath"] = executablePath;
+                }
+            }
+        }
+
+        if (CFDictionaryContainsKey(info, applicationKey)) {
+            CFStringRef applicationName = (CFStringRef)CFDictionaryGetValue(info, applicationKey);
+            if (applicationName) {
+                if (CFGetTypeID(applicationName) == CFStringGetTypeID()) {
+                    information["displayName"] = CFStringGetCStringPtr(applicationName, kCFStringEncodingUTF8);
+                }
+            }
+        }
+
+        if (CFDictionaryContainsKey(info, identifierKey)) {
+            CFStringRef identifier = (CFStringRef)CFDictionaryGetValue(info, identifierKey);
+            if (identifier) {
+                if (CFGetTypeID(identifier) == CFStringGetTypeID()) {
+                    information["bundleIdentifier"] = CFStringGetCStringPtr(identifier, kCFStringEncodingUTF8);
+                }
+            }
+        }
+
+        return information;
+    };
+
     class file {
     public:
         file(const char *path) : file_(fopen(path, "r+")) {
@@ -339,7 +352,7 @@ namespace rmaslr {
             }
 
             if (::stat(path, &sbuf_) != 0) {
-                error("rmaslr::file() - Unable to gather information on file at path (\"%s\"), errno=%d(%s)", path, errno, strerror(errno));
+                error("rmaslr::file() - Unable to gather information on file at path (\"%s\"), (::stat(path, &sbuf_) failed), errno=%d(%s)", path, errno, strerror(errno));
             }
         }
 
@@ -463,10 +476,10 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
     const char *binary_path = nullptr;
 
     //needs a better method
-    is_ios = access("/System/Library/PrivateFrameworks/SpringBoardServices.framework", F_OK) == 0;
+    rmaslr::is_ios = access("/System/Library/PrivateFrameworks/SpringBoardServices.framework", F_OK) == 0;
     void *handle = nullptr;
 
-    if (is_ios) {
+    if (rmaslr::is_ios) {
         handle = dlopen("/System/Library/PrivateFrameworks/SpringBoardServices.framework/SpringBoardServices", RTLD_NOW);
         if (!handle) {
             assert_("Unable to load Required Framework: SpringBoardServices");
@@ -493,106 +506,6 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
     if (option[0] == '-') {
         option++;
     }
-
-    auto parse_application_container = [](const std::string& path) {
-        std::string name = std::find_last_component(path);
-
-        auto information = std::map<const char *, std::string>();
-        auto pos = name.find(".app");
-
-        if (pos == std::string::npos) {
-            return information;
-        }
-
-        if (pos == 0 || pos != (name.length() - (sizeof(".app") - 1))) {
-            return information;
-        }
-
-        std::string infoPath = path + "/Contents/Info.plist";
-        if (access(infoPath.c_str(), F_OK) != 0) {
-            return information;
-        }
-
-        CFStringRef pathString = CFStringCreateWithCString(kCFAllocatorDefault, infoPath.c_str(), kCFStringEncodingUTF8);
-        if (!pathString) {
-            return information;
-        }
-
-        CFURLRef pathURL = CFURLCreateWithFileSystemPath(kCFAllocatorDefault, pathString, kCFURLPOSIXPathStyle, false);
-        if (!pathString) {
-            return information;
-        }
-
-        CFReadStreamRef pathStream = CFReadStreamCreateWithFile(kCFAllocatorDefault, pathURL);
-        if (!pathStream) {
-            return information;
-        }
-
-        CFReadStreamOpen(pathStream);
-
-        CFErrorRef pathError = nullptr;
-        CFPropertyListRef pathPlist = CFPropertyListCreateWithStream(kCFAllocatorDefault, pathStream, 0, kCFPropertyListImmutable, nullptr, &pathError);
-
-        if (pathError) {
-            return information;
-        }
-
-        if (!pathPlist) {
-            return information;
-        }
-
-        if (CFGetTypeID(pathPlist) != CFDictionaryGetTypeID()) {
-            return information;
-        }
-
-        information = {
-            { "bundleIdentifier", "" },
-            { "containerName", name.substr(0, pos) },
-            { "displayName", "" },
-            { "executableName", "" },
-            { "executablePath", ""}
-        };
-
-        CFStringRef applicationKey = CFStringCreateWithCString(kCFAllocatorDefault, "CFBundleName", kCFStringEncodingUTF8);
-        CFStringRef identifierKey = CFStringCreateWithCString(kCFAllocatorDefault, "CFBundleIdentifier", kCFStringEncodingUTF8);
-        CFStringRef executableKey = CFStringCreateWithCString(kCFAllocatorDefault, "CFBundleExecutable", kCFStringEncodingUTF8);
-
-        CFDictionaryRef info = (CFDictionaryRef)pathPlist;
-        if (CFDictionaryContainsKey(info, executableKey)) {
-            CFStringRef executableName = (CFStringRef)CFDictionaryGetValue(info, executableKey);
-            if (executableName) {
-                if (CFGetTypeID(executableName) == CFStringGetTypeID()) {
-                    const char *executable_name = CFStringGetCStringPtr(executableName, kCFStringEncodingUTF8);
-                    information["executableName"] = executable_name;
-
-                    std::string executablePath = path + "/Contents/MacOS/";
-                    executablePath += executable_name;
-
-                    information["executablePath"] = executablePath;
-                }
-            }
-        }
-
-        if (CFDictionaryContainsKey(info, applicationKey)) {
-            CFStringRef applicationName = (CFStringRef)CFDictionaryGetValue(info, applicationKey);
-            if (applicationName) {
-                if (CFGetTypeID(applicationName) == CFStringGetTypeID()) {
-                    information["displayName"] = CFStringGetCStringPtr(applicationName, kCFStringEncodingUTF8);
-                }
-            }
-        }
-
-        if (CFDictionaryContainsKey(info, identifierKey)) {
-            CFStringRef identifier = (CFStringRef)CFDictionaryGetValue(info, identifierKey);
-            if (identifier) {
-                if (CFGetTypeID(identifier) == CFStringGetTypeID()) {
-                    information["bundleIdentifier"] = CFStringGetCStringPtr(identifier, kCFStringEncodingUTF8);
-                }
-            }
-        }
-
-        return information;
-    };
 
     auto find_last_component = [](const char *string) {
         char const *result = string;
@@ -629,7 +542,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
 
         auto applications = std::vector<std::map<const char *, std::string>>();
 
-        if (is_ios) {
+        if (rmaslr::is_ios) {
             CFArrayRef applications_ = SBSCopyApplicationDisplayIdentifiers(false, false);
             if (!applications_) {
                 assert_("Unable to retrieve application-list");
@@ -677,7 +590,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
 
             while ((dir_entry = readdir(directory))) {
                 auto application = applicationDirectory + dir_entry->d_name;
-                auto application_information = parse_application_container(application);
+                auto application_information = rmaslr::parse_application_container(application);
 
                 if (application_information.empty()) {
                     continue;
@@ -687,7 +600,134 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
             }
         }
 
-        std::print_vector(applications, use_listing);
+        auto sorted_vector = std::vector<std::map<const char *, std::string>>();
+        std::string first_name;
+
+        for (auto& information : applications) {
+            auto information_ = information;
+
+            std::string name = information_["containerName"];
+            if (name.empty() || std::is_in_map(sorted_vector, name)) {
+                name = information_["displayName"];
+                if (name.empty() || std::is_in_map(sorted_vector, name)) {
+                    name = information_["executableName"];
+                    if (!use_listing) {
+                        information_["displayName"] = "";
+                        information_["containerName"] = "";
+                    }
+                } else if (!use_listing) {
+                    information_["executableName"] = "";
+                    information_["containerName"] = "";
+                }
+            } else if (!use_listing) {
+                information_["displayName"] = "";
+                information_["executableName"] = "";
+            }
+
+            sorted_vector.push_back(information);
+        }
+
+        std::sort(sorted_vector.begin(), sorted_vector.end(), [](std::map<const char *, std::string>& first, std::map<const char *, std::string>& second) {
+            std::string first_name = first["containerName"];
+            if (first_name.empty()) {
+                first_name = first["displayName"];
+                if (first_name.empty()) {
+                    first_name = first["executableName"];
+                    if (first_name.empty()) {
+                        return false;
+                    }
+                }
+            }
+
+            std::string second_name = second["containerName"];
+            if (second_name.empty()) {
+                second_name = second["displayName"];
+                if (second_name.empty()) {
+                    second_name = second["executableName"];
+                    if (second_name.empty()) {
+                        return false;
+                    }
+                }
+            }
+
+            return std::case_compare(first_name, second_name);
+        });
+
+        if (use_listing) {
+            auto max_container_size = 0;
+            auto max_display_size = 0;
+            auto max_executable_name_size = 0;
+
+            for (auto& information : sorted_vector) {
+                if (!rmaslr::is_ios) {
+                    auto container_length = information["containerName"].length();
+                    if (max_container_size < container_length) {
+                        max_container_size = container_length;
+                    }
+                }
+
+                auto display_length = information["displayName"].length();
+                if (max_display_size < display_length) {
+                    max_display_size = display_length;
+                }
+
+                auto executable_length = information["executableName"].length();
+                if (max_executable_name_size < executable_length) {
+                    max_executable_name_size = executable_length;
+                }
+            }
+
+            std::string container_spaces;
+            if (!rmaslr::is_ios) {
+                container_spaces = rmaslr::get_spaces(max_container_size + 1);
+            }
+
+            std::string display_spaces = rmaslr::get_spaces(max_display_size + 1);
+            std::string executable_spaces = rmaslr::get_spaces(max_executable_name_size + 1);
+
+            auto i = 1;
+            auto size_spaces = rmaslr::get_spaces(rmaslr::get_size(sorted_vector.size()));
+
+            for (auto& information : sorted_vector) {
+                if (rmaslr::is_ios) {
+                    fprintf(stdout, "%d. %sApplication (Display Name: \"%s\",%sExecutable Name: \"%s\",%sBundle Identifier: \"%s\")\n", i, &size_spaces[rmaslr::get_size(i)], information["displayName"].c_str(), &display_spaces[information["displayName"].length()], information["executableName"].c_str(), &executable_spaces[information["executableName"].length()], information["bundleIdentifier"].c_str());
+                } else {
+                    fprintf(stdout, "%d. %sApplication (Container Name: \"%s\",%sDisplay Name: \"%s\",%sExecutable Name: \"%s\",%sBundle Identifier: \"%s\")\n", i, &size_spaces[rmaslr::get_size(i)], information["containerName"].c_str(), &container_spaces[information["containerName"].length()], information["displayName"].c_str(), &display_spaces[information["displayName"].length()], information["executableName"].c_str(), &executable_spaces[information["executableName"].length()], information["bundleIdentifier"].c_str());
+                }
+
+                i++;
+            }
+        } else {
+            auto front = sorted_vector.front();
+
+            std::string name = front["containerName"];
+            if (name.empty()) {
+                name = front["displayName"];
+                if (name.empty()) {
+                    name = front["executableName"];
+                }
+            }
+
+            fprintf(stdout, "%s", name.c_str());
+            sorted_vector.erase(sorted_vector.begin());
+
+            for (auto& information : sorted_vector) {
+                name = information["containerName"];
+                if (name.empty()) {
+                    name = information["displayName"];
+                    if (name.empty()) {
+                        name = information["executableName"];
+                        if (name.empty()) {
+                            continue;
+                        }
+                    }
+                }
+
+                fprintf(stdout, ", %s", name.c_str());
+            }
+
+            fprintf(stdout, "\n");
+        }
         return 0;
     } else if (strcmp(option, "archs") == 0) {
         if (argc > 2) {
@@ -737,7 +777,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
             auto applications_found = std::vector<std::map<const char *, std::string>>();
             auto app_name = argv[i];
 
-            if (is_ios) {
+            if (rmaslr::is_ios) {
                 CFArrayRef apps = SBSCopyApplicationDisplayIdentifiers(false, false);
                 if (!apps) {
                     assert_("Unable to retrieve application-list");
@@ -798,7 +838,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
 
                 while ((dir_entry = readdir(directory))) {
                     auto application = applicationDirectory + dir_entry->d_name;
-                    auto information = parse_application_container(application);
+                    auto information = rmaslr::parse_application_container(application);
 
                     if (information.empty()) {
                         continue;
@@ -834,7 +874,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
                 auto max_executable_name_size = 0;
 
                 for (auto& information : applications_found) {
-                    if (!is_ios) {
+                    if (!rmaslr::is_ios) {
                         auto container_length = information["containerName"].length();
                         if (max_container_size < container_length) {
                             max_container_size = container_length;
@@ -852,55 +892,32 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
                     }
                 }
 
-                auto get_spaces = [](std::string::size_type length) {
-                    std::string return_value;
-                    return_value.resize(length, ' ');
-
-                    return return_value;
-                };
-
                 std::string container_spaces;
-                if (!is_ios) {
-                    container_spaces = get_spaces(max_container_size + 1);
+                if (!rmaslr::is_ios) {
+                    container_spaces = rmaslr::get_spaces(max_container_size + 1);
                 }
 
-                std::string display_spaces = get_spaces(max_display_size + 1);
-                std::string executable_spaces = get_spaces(max_executable_name_size + 1);
-
-                auto get_size = [](size_t size) {
-                    auto length = 0;
-                    double size_ = size;
-
-                    while (size_ / 10 >= 1) {
-                        size_ /= 10;
-                        length++;
-                    }
-
-                    return length++;
-                };
+                std::string display_spaces = rmaslr::get_spaces(max_display_size + 1);
+                std::string executable_spaces = rmaslr::get_spaces(max_executable_name_size + 1);
 
                 auto i = 1;
-                auto size_spaces = get_spaces(get_size(applications_found.size()));
+                auto size_spaces = rmaslr::get_spaces(rmaslr::get_size(applications_found.size()));
 
                 for (auto iter = applications_found.begin(); iter != applications_found.end(); iter++) {
                     auto information = *iter;
 
-                    if (is_ios) {
-                        fprintf(stdout, "%d. %sApplication (Display Name: \"%s\",%sExecutable Name: \"%s\",%sBundle Identifier: \"%s\")\n", i, &size_spaces[get_size(i)], information["displayName"].c_str(), &display_spaces[information["displayName"].length()], information["executableName"].c_str(), &executable_spaces[information["executableName"].length()], information["bundleIdentifier"].c_str());
+                    if (rmaslr::is_ios) {
+                        fprintf(stdout, "%d. %sApplication (Display Name: \"%s\",%sExecutable Name: \"%s\",%sBundle Identifier: \"%s\")\n", i, &size_spaces[rmaslr::get_size(i)], information["displayName"].c_str(), &display_spaces[information["displayName"].length()], information["executableName"].c_str(), &executable_spaces[information["executableName"].length()], information["bundleIdentifier"].c_str());
                     } else {
-                        fprintf(stdout, "%d. %sApplication (Container Name: \"%s\",%sDisplay Name: \"%s\",%sExecutable Name: \"%s\",%sBundle Identifier: \"%s\")\n", i, &size_spaces[get_size(i)], information["containerName"].c_str(), &container_spaces[information["containerName"].length()], information["displayName"].c_str(), &display_spaces[information["displayName"].length()], information["executableName"].c_str(), &executable_spaces[information["executableName"].length()], information["bundleIdentifier"].c_str());
+                        fprintf(stdout, "%d. %sApplication (Container Name: \"%s\",%sDisplay Name: \"%s\",%sExecutable Name: \"%s\",%sBundle Identifier: \"%s\")\n", i, &size_spaces[rmaslr::get_size(i)], information["containerName"].c_str(), &container_spaces[information["containerName"].length()], information["displayName"].c_str(), &display_spaces[information["displayName"].length()], information["executableName"].c_str(), &executable_spaces[information["executableName"].length()], information["bundleIdentifier"].c_str());
                     }
 
                     i++;
                 }
 
-                int result = -1;
-                while (result < 1 || result > applications_found.size()) {
-                    std::cout << "Please select one of the applications by number: ";
-                    std::cin >> result;
-                }
-
+                auto result = rmaslr::request_input_ranged<int>("Please select one of the applications above by number", { 1, i });
                 auto application_information = applications_found[result - 1];
+
                 binary_path = strdup(application_information["executablePath"].c_str());
 
                 auto displayName = application_information["displayName"];
@@ -912,7 +929,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
                     applications_found.erase(iter);
                 }
 
-                if (!std::is_in_map(applications_found, containerName) && !is_ios) {
+                if (!std::is_in_map(applications_found, containerName) && !rmaslr::is_ios) {
                     name = strdup(containerName.c_str());
                 } else if (!std::is_in_map(applications_found, displayName)) {
                     name = strdup(displayName.c_str());
@@ -924,7 +941,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
             } else {
                 auto application_information = applications_found.front();
 
-                if (is_ios) {
+                if (rmaslr::is_ios) {
                     name = strdup(application_information["displayName"].c_str());
                 } else {
                     name = app_name;
@@ -950,7 +967,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
             const char *path = argv[i];
 
             if (path[0] != '/') {
-                std::string current_directory = Environment::CurrentDirectory;
+                std::string current_directory = environment::current_directory;
 
                 current_directory.append(path);
                 path = current_directory.c_str();
@@ -963,9 +980,9 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
 
             name = find_last_component(path);
 
-            if (!is_ios && S_ISDIR(sbuf.st_mode)) {
+            if (!rmaslr::is_ios && S_ISDIR(sbuf.st_mode)) {
                 auto path_ = std::string(path);
-                auto information = parse_application_container(path_);
+                auto information = rmaslr::parse_application_container(path_);
 
                 if (information.empty()) {
                     assert_("Directory at path (%s) is not an application", path);
@@ -1087,7 +1104,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
     }
 
     auto has_aslr = [](struct mach_header header, uint32_t *flags = nullptr) {
-        uint32_t flags_ = swap(header.magic, header.flags);
+        uint32_t flags_ = rmaslr::swap(header.magic, header.flags);
         if (flags) {
             *flags = flags_;
         }
@@ -1114,13 +1131,13 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
         }
 
         //ask user if should remove ASLR for arm64
-        int32_t cputype = swap(header.magic, header.cputype);
+        int32_t cputype = rmaslr::swap(header.magic, header.cputype);
         if (cputype == CPU_TYPE_ARM64) {
             bool can_continue = false;
             bool is_valid = false;
 
-            //use std::string and std::cin for safety instead of a risky char* and scanf()
-            std::string result;
+            std::string question = rmaslr::formatted_string("Removing ASLR on a 64-bit arm %s (%s) can result in it crashing. Are you sure you want to continue (y/n): ", uses_application ? "application" : "file", name);
+            std::string result = rmaslr::request_input<std::string>(question, {"y", "n"});
 
             do {
                 if (uses_application) {
@@ -1141,7 +1158,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
         }
 
         flags &= ~MH_PIE;
-        header.flags = swap(header.magic, flags);
+        header.flags = rmaslr::swap(header.magic, flags);
 
         file.seek(offset, rmaslr::file::seek_type::origin);
         file.write<struct mach_header>(header);
@@ -1162,7 +1179,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
         file.seek(0x0, rmaslr::file::seek_type::origin);
         struct fat_header fat = file.read<struct fat_header>();
 
-        uint32_t architectures_count = swap(magic, fat.nfat_arch);
+        uint32_t architectures_count = rmaslr::swap(magic, fat.nfat_arch);
         if (!architectures_count) {
             if (uses_application) {
                 assert_("Application (%s)'s executable cannot have 0 architectures", name);
@@ -1185,9 +1202,9 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
                 struct fat_arch_64 arch = file.read<struct fat_arch_64>();
 
                 current_offset += sizeof(struct fat_arch_64);
-                long header_offset = static_cast<long>(swap(magic, arch.offset));
+                long header_offset = static_cast<long>(rmaslr::swap(magic, arch.offset));
 
-                const NXArchInfo *archInfo = NXGetArchInfoFromCpuType(swap(magic, arch.cputype), swap(magic, arch.cpusubtype));
+                const NXArchInfo *archInfo = NXGetArchInfoFromCpuType(rmaslr::swap(magic, arch.cputype), rmaslr::swap(magic, arch.cpusubtype));
                 if (!archInfo) {
                     assert_("Architecture at offset 0x%.16lX is not valid", current_offset);
                 }
@@ -1255,9 +1272,9 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
             long current_offset = file.position();
             for (uint32_t i = 0; i < architectures_count; i++) {
                 struct fat_arch arch = file.read<struct fat_arch>();
-                long header_offset = static_cast<long>(swap(magic, arch.offset));
+                long header_offset = static_cast<long>(rmaslr::swap(magic, arch.offset));
 
-                const NXArchInfo *archInfo = NXGetArchInfoFromCpuType(swap(magic, arch.cputype), swap(magic, arch.cpusubtype));
+                const NXArchInfo *archInfo = NXGetArchInfoFromCpuType(rmaslr::swap(magic, arch.cputype), rmaslr::swap(magic, arch.cpusubtype));
                 if (!archInfo) {
                     assert_("Architecture at offset 0x%.8lX is not valid", current_offset);
                 }
@@ -1322,7 +1339,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
 
         auto it = default_architectures.end();
         if (default_architectures.size()) {
-            const NXArchInfo *archInfo = NXGetArchInfoFromCpuType(swap(header.magic, header.cputype), swap(header.magic, header.cpusubtype));
+            const NXArchInfo *archInfo = NXGetArchInfoFromCpuType(rmaslr::swap(header.magic, header.cputype), rmaslr::swap(header.magic, header.cpusubtype));
 
             for (it = default_architectures.begin(); it != default_architectures.end(); it++) {
                 if (*it != archInfo) {
@@ -1393,8 +1410,8 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
         for (const auto& item : headers) {
             struct mach_header header = item.second;
 
-            uint32_t cputype = swap(header.magic, header.cputype);
-            uint32_t cpusubtype = swap(header.magic, header.cpusubtype);
+            uint32_t cputype = rmaslr::swap(header.magic, header.cputype);
+            uint32_t cpusubtype = rmaslr::swap(header.magic, header.cpusubtype);
 
             const NXArchInfo *archInfo = NXGetArchInfoFromCpuType(cputype, cpusubtype);
             bool aslr = has_aslr(header);
@@ -1422,8 +1439,8 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
         long offset = item.first;
         struct mach_header header = item.second;
 
-        uint32_t cputype = swap(header.magic, header.cputype);
-        uint32_t cpusubtype = swap(header.magic, header.cpusubtype);
+        uint32_t cputype = rmaslr::swap(header.magic, header.cputype);
+        uint32_t cpusubtype = rmaslr::swap(header.magic, header.cpusubtype);
 
         bool is_thin = size < 2;
         const NXArchInfo *archInfo = NXGetArchInfoFromCpuType(cputype, cpusubtype);
