@@ -29,7 +29,7 @@ if [ "$1" = "build" ]; then
     if [ "$platform" = "ios" ] || [ "$platform" = "iphoneos" ]; then
         cmake . -DCMAKE_BUILD_TYPE=Release -G "Unix Makefiles" -DCMAKE_TOOLCHAIN_FILE=iphoneos.cmake -DIOS_PLATFORM=OS -DIOS_DEPLOYMENT_TARGET=9.0 -B./build
     elif [ "$platform" = "macos" ] || [ "$platform" = "macosx" ]; then
-        cmake . -DCMAKE_BUILD_TYPE=Release -G "Unix Makefiles" -DCMAKE_TOOLCHAIN_FILE=macosx.cmake -DMACOS_DEPLOYMENT_TARGET=10.8 -B./build
+        cmake . -DCMAKE_BUILD_TYPE=Release -G "Unix Makefiles" -B./build
     else
         error "Invalid option \"$platform\""
     fi
