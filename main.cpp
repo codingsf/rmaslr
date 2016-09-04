@@ -120,7 +120,7 @@ namespace std {
         auto size = std::min(first_size, second_size);
         for (auto i = 0; i < size; i++) {
             char fc = tolower(first[i]);
-            char sc = tolower(first[i]);
+            char sc = tolower(second[i]);
 
             if (fc == sc) {
                 continue;
@@ -134,6 +134,82 @@ namespace std {
 }
 
 namespace rmaslr {
+    class platform {
+    public:
+        static bool iphoneos() noexcept {
+            return get_platform() == "iPhone OS";
+        }
+
+        static bool macosx() noexcept {
+            return get_platform() == "Mac OS X";
+        }
+    private:
+        static std::string get_platform() noexcept {
+            static std::string platform = load_from_filesystem();
+            return platform;
+        }
+
+        static std::string load_from_filesystem() {
+            const char *path = "/System/Library/CoreServices/SystemVersion.plist";
+            if (access(path, F_OK) != 0) {
+                error("platform::load_from_filesystem(); File does not exists at path (\"%s\"), possibly corrupted or not unix/linux system", path);
+            }
+
+            CFStringRef pathString = CFStringCreateWithCString(kCFAllocatorDefault, path, kCFStringEncodingUTF8);
+            if (!pathString) {
+                error("platform::load_from_filesystem(); Unable to allocate CFStringRef, errno=%d(%s)", errno, strerror(errno));
+            }
+
+            CFURLRef pathURL = CFURLCreateWithFileSystemPath(kCFAllocatorDefault, pathString, kCFURLPOSIXPathStyle, false);
+            if (!pathURL) {
+                error("platform::load_from_filesystem(); Unable to allocate CFURLRef, errno=%d(%s)", errno, strerror(errno));
+            }
+
+            CFReadStreamRef pathStream = CFReadStreamCreateWithFile(kCFAllocatorDefault, pathURL);
+            if (!pathStream) {
+                error("platform::load_from_filesystem(); Unable to create CFReadStream from file (\"%s\"), errno=%d(%s)", path, errno, strerror(errno));
+            }
+
+            CFReadStreamOpen(pathStream);
+
+            CFErrorRef pathError = nullptr;
+            CFDictionaryRef pathPlist = (CFDictionaryRef)CFPropertyListCreateWithStream(kCFAllocatorDefault, pathStream, 0, kCFPropertyListImmutable, nullptr, &pathError);
+
+            if (pathError) {
+                const char *error_string = CFStringGetCStringPtr(CFErrorCopyDescription(pathError), kCFStringEncodingUTF8);
+                error("platform::load_from_filesystem(); Failed to open property list at path (\"%s\"), with error: \"%s\"", path, error_string);
+            }
+
+            if (!pathPlist) {
+                error("platform::load_from_filesystem(); Failed to open property list at path (\"%s\"), errno=%d(%s)", path, errno, strerror(errno));
+            }
+
+            if (CFGetTypeID(pathPlist) != CFDictionaryGetTypeID()) {
+                error("platform::load_from_filesystem(); Property list at path (\"%s\") is not a dictionary", path);
+            }
+
+            CFStringRef operatingSystemKey = CFStringCreateWithCString(kCFAllocatorDefault, "ProductName", kCFStringEncodingUTF8);
+            if (!operatingSystemKey) {
+                error("platform::load_from_filesystem(); Unable to allocate buffer for storing key (\"PlatformName\"), errno=%d(%s)", errno, strerror(errno));
+            }
+
+            if (!CFDictionaryContainsKey(pathPlist, operatingSystemKey)) {
+                error("platform::load_from_filesystem(); Unable to find key (\"ProductName\") in dictionary", errno, strerror(errno));
+            }
+
+            CFStringRef platform = (CFStringRef)CFDictionaryGetValue(pathPlist, operatingSystemKey);
+            if (!platform) {
+                error("platform::load_from_filesystem(); Unable to get value for key (\"PlatformName\")", errno, strerror(errno));
+            }
+
+            if (CFGetTypeID(platform) != CFStringGetTypeID()) {
+                error("platform::load_from_filesystem(); Platform from path (\"%s\") is not a string", path);
+            }
+
+            return CFStringGetCStringPtr(platform, kCFStringEncodingUTF8);
+        }
+    };
+
     template <typename T>
     T request_input(std::string question, std::vector<T> values = std::vector<T>()) {
         T input;
@@ -166,30 +242,28 @@ namespace rmaslr {
     T request_input_ranged(std::string question, std::pair<T, T> range) {
         T input;
 
-        auto is_valid = [&range](T input) {
-            return input >= range.first && input <= range.second;
-        };
-
         do {
             std::cout << question;
             std::cin >> input;
-        } while (!is_valid(input));
+        } while (input < range.first || input > range.second);
 
         return input;
     }
 
-    static bool is_ios = false;
-
     auto get_size = [](size_t size) {
+        if (!size) {
+            return 1;
+        }
+
         auto length = 0;
         double size_ = size;
 
-        while (size_ / 10 >= 1) {
+        do {
             size_ /= 10;
             length++;
-        }
+        } while (size_ / 10 >= 1);
 
-        return length++;
+        return length;
     };
 
     static uint32_t swap(uint32_t magic, uint32_t value) noexcept {
@@ -212,11 +286,12 @@ namespace rmaslr {
     }
 
     static inline int32_t swap(uint32_t magic, int32_t value) noexcept {
-        return static_cast<int32_t>(rmaslr::swap(magic, static_cast<uint32_t>(value)));
+        return static_cast<int32_t>(swap(magic, static_cast<uint32_t>(value)));
     }
 
-    __attribute__((unused)) static inline int64_t swap(uint32_t magic, int64_t value) noexcept {
-        return static_cast<int64_t>(rmaslr::swap(magic, static_cast<uint64_t>(value)));
+    __attribute__((unused))
+    static inline int64_t swap(uint32_t magic, int64_t value) noexcept {
+        return static_cast<int64_t>(swap(magic, static_cast<uint64_t>(value)));
     }
 
     __printflike(1, 2)
@@ -234,10 +309,6 @@ namespace rmaslr {
         va_end(list);
 
         return formatted;
-    };
-
-    auto get_spaces = [](std::string::size_type length) {
-        return std::string(length, ' ');
     };
 
     auto parse_application_container = [](const std::string& path) {
@@ -342,11 +413,7 @@ namespace rmaslr {
 
     class file {
     public:
-        file(const char *path) : file_(fopen(path, "r+")) {
-
-        }
-
-        file(const char *path, const char *mode) : file_(fopen(path, mode)) {
+        file(const char *path, const char *mode = "r+") : file_(fopen(path, mode)) {
             if (!file_) {
                 error("rmaslr::file() - Unable to open file at path (\"%s\"), with mode (\"%s\") (fopen(path, mode) failed), errno=%d(%s)", path, mode, errno, strerror(errno));
             }
@@ -364,7 +431,7 @@ namespace rmaslr {
             position_ = ftell(file_);
         }
 
-        ~file() noexcept {
+        inline ~file() noexcept {
             fclose(file_);
         }
 
@@ -475,11 +542,9 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
     const char *name = nullptr;
     const char *binary_path = nullptr;
 
-    //needs a better method
-    rmaslr::is_ios = access("/System/Library/PrivateFrameworks/SpringBoardServices.framework", F_OK) == 0;
     void *handle = nullptr;
 
-    if (rmaslr::is_ios) {
+    if (rmaslr::platform::iphoneos()) {
         handle = dlopen("/System/Library/PrivateFrameworks/SpringBoardServices.framework/SpringBoardServices", RTLD_NOW);
         if (!handle) {
             assert_("Unable to load Required Framework: SpringBoardServices");
@@ -542,7 +607,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
 
         auto applications = std::vector<std::map<const char *, std::string>>();
 
-        if (rmaslr::is_ios) {
+        if (rmaslr::platform::iphoneos()) {
             CFArrayRef applications_ = SBSCopyApplicationDisplayIdentifiers(false, false);
             if (!applications_) {
                 assert_("Unable to retrieve application-list");
@@ -659,7 +724,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
             auto max_executable_name_size = 0;
 
             for (auto& information : sorted_vector) {
-                if (!rmaslr::is_ios) {
+                if (rmaslr::platform::macosx()) {
                     auto container_length = information["containerName"].length();
                     if (max_container_size < container_length) {
                         max_container_size = container_length;
@@ -678,18 +743,18 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
             }
 
             std::string container_spaces;
-            if (!rmaslr::is_ios) {
-                container_spaces = rmaslr::get_spaces(max_container_size + 1);
+            if (rmaslr::platform::macosx()) {
+                container_spaces = std::string(max_container_size + 1, ' ');
             }
 
-            std::string display_spaces = rmaslr::get_spaces(max_display_size + 1);
-            std::string executable_spaces = rmaslr::get_spaces(max_executable_name_size + 1);
+            std::string display_spaces = std::string(max_display_size + 1, ' ');
+            std::string executable_spaces = std::string(max_executable_name_size + 1, ' ');
 
             auto i = 1;
-            auto size_spaces = rmaslr::get_spaces(rmaslr::get_size(sorted_vector.size()));
+            auto size_spaces = std::string(rmaslr::get_size(sorted_vector.size()), ' ');
 
             for (auto& information : sorted_vector) {
-                if (rmaslr::is_ios) {
+                if (rmaslr::platform::iphoneos()) {
                     fprintf(stdout, "%d. %sApplication (Display Name: \"%s\",%sExecutable Name: \"%s\",%sBundle Identifier: \"%s\")\n", i, &size_spaces[rmaslr::get_size(i)], information["displayName"].c_str(), &display_spaces[information["displayName"].length()], information["executableName"].c_str(), &executable_spaces[information["executableName"].length()], information["bundleIdentifier"].c_str());
                 } else {
                     fprintf(stdout, "%d. %sApplication (Container Name: \"%s\",%sDisplay Name: \"%s\",%sExecutable Name: \"%s\",%sBundle Identifier: \"%s\")\n", i, &size_spaces[rmaslr::get_size(i)], information["containerName"].c_str(), &container_spaces[information["containerName"].length()], information["displayName"].c_str(), &display_spaces[information["displayName"].length()], information["executableName"].c_str(), &executable_spaces[information["executableName"].length()], information["bundleIdentifier"].c_str());
@@ -777,7 +842,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
             auto applications_found = std::vector<std::map<const char *, std::string>>();
             auto app_name = argv[i];
 
-            if (rmaslr::is_ios) {
+            if (rmaslr::platform::iphoneos()) {
                 CFArrayRef apps = SBSCopyApplicationDisplayIdentifiers(false, false);
                 if (!apps) {
                     assert_("Unable to retrieve application-list");
@@ -867,14 +932,14 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
             }
 
             if (applications_found.size() > 1) {
-                fprintf(stdout, "Multiple Applications with name (\"%s\") have been found:\n", app_name);
+                fprintf(stdout, "Multiple Applications with the name (\"%s\") have been found:\n", app_name);
 
                 auto max_container_size = 0;
                 auto max_display_size = 0;
                 auto max_executable_name_size = 0;
 
                 for (auto& information : applications_found) {
-                    if (!rmaslr::is_ios) {
+                    if (rmaslr::platform::macosx()) {
                         auto container_length = information["containerName"].length();
                         if (max_container_size < container_length) {
                             max_container_size = container_length;
@@ -893,20 +958,20 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
                 }
 
                 std::string container_spaces;
-                if (!rmaslr::is_ios) {
-                    container_spaces = rmaslr::get_spaces(max_container_size + 1);
+                if (rmaslr::platform::macosx()) {
+                    container_spaces = std::string(max_container_size + 1, ' ');
                 }
 
-                std::string display_spaces = rmaslr::get_spaces(max_display_size + 1);
-                std::string executable_spaces = rmaslr::get_spaces(max_executable_name_size + 1);
+                std::string display_spaces = std::string(max_display_size + 1, ' ');
+                std::string executable_spaces = std::string(max_executable_name_size + 1, ' ');
 
                 auto i = 1;
-                auto size_spaces = rmaslr::get_spaces(rmaslr::get_size(applications_found.size()));
+                auto size_spaces = std::string(rmaslr::get_size(applications_found.size()), ' ');
 
                 for (auto iter = applications_found.begin(); iter != applications_found.end(); iter++) {
                     auto information = *iter;
 
-                    if (rmaslr::is_ios) {
+                    if (rmaslr::platform::iphoneos()) {
                         fprintf(stdout, "%d. %sApplication (Display Name: \"%s\",%sExecutable Name: \"%s\",%sBundle Identifier: \"%s\")\n", i, &size_spaces[rmaslr::get_size(i)], information["displayName"].c_str(), &display_spaces[information["displayName"].length()], information["executableName"].c_str(), &executable_spaces[information["executableName"].length()], information["bundleIdentifier"].c_str());
                     } else {
                         fprintf(stdout, "%d. %sApplication (Container Name: \"%s\",%sDisplay Name: \"%s\",%sExecutable Name: \"%s\",%sBundle Identifier: \"%s\")\n", i, &size_spaces[rmaslr::get_size(i)], information["containerName"].c_str(), &container_spaces[information["containerName"].length()], information["displayName"].c_str(), &display_spaces[information["displayName"].length()], information["executableName"].c_str(), &executable_spaces[information["executableName"].length()], information["bundleIdentifier"].c_str());
@@ -915,7 +980,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
                     i++;
                 }
 
-                auto result = rmaslr::request_input_ranged<int>("Please select one of the applications above by number", { 1, i });
+                auto result = rmaslr::request_input_ranged<int>("Please select one of the applications above by number: ", { 1, i });
                 auto application_information = applications_found[result - 1];
 
                 binary_path = strdup(application_information["executablePath"].c_str());
@@ -929,7 +994,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
                     applications_found.erase(iter);
                 }
 
-                if (!std::is_in_map(applications_found, containerName) && !rmaslr::is_ios) {
+                if (!std::is_in_map(applications_found, containerName) && rmaslr::platform::macosx()) {
                     name = strdup(containerName.c_str());
                 } else if (!std::is_in_map(applications_found, displayName)) {
                     name = strdup(displayName.c_str());
@@ -941,7 +1006,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
             } else {
                 auto application_information = applications_found.front();
 
-                if (rmaslr::is_ios) {
+                if (rmaslr::platform::iphoneos()) {
                     name = strdup(application_information["displayName"].c_str());
                 } else {
                     name = app_name;
@@ -980,7 +1045,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
 
             name = find_last_component(path);
 
-            if (!rmaslr::is_ios && S_ISDIR(sbuf.st_mode)) {
+            if (rmaslr::platform::macosx() && S_ISDIR(sbuf.st_mode)) {
                 auto path_ = std::string(path);
                 auto information = rmaslr::parse_application_container(path_);
 
@@ -1068,7 +1133,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
         assert_("Unable to get path");
     }
 
-    rmaslr::file file(binary_path, "r+");
+    auto file = rmaslr::file(binary_path);
     struct stat sbuf = file.stat();
 
     if (sbuf.st_size < sizeof(struct mach_header_64)) {
@@ -1133,26 +1198,10 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
         //ask user if should remove ASLR for arm64
         int32_t cputype = rmaslr::swap(header.magic, header.cputype);
         if (cputype == CPU_TYPE_ARM64) {
-            bool can_continue = false;
-            bool is_valid = false;
-
             std::string question = rmaslr::formatted_string("Removing ASLR on a 64-bit arm %s (%s) can result in it crashing. Are you sure you want to continue (y/n): ", uses_application ? "application" : "file", name);
-            std::string result = rmaslr::request_input<std::string>(question, {"y", "n"});
+            std::string result = rmaslr::request_input<std::string>(question, { "y", "n" });
 
-            do {
-                if (uses_application) {
-                    fprintf(stdout, "Removing ASLR on a 64-bit arm application (%s) can result in it crashing. Are you sure you want to continue (y/n): ", name);
-                } else {
-                    fprintf(stdout, "Removing ASLR on a 64-bit arm file (%s) can result in it crashing. Are you sure you want to continue (y/n): ", name);
-                }
-
-                std::cin >> result;
-
-                can_continue = result == "y" || result == "Y";
-                is_valid = can_continue || (result == "n" || result == "N");
-            } while (!is_valid);
-
-            if (!can_continue) {
+            if (result == "n" || result == "N") {
                 return false;
             }
         }

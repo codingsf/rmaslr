@@ -122,29 +122,34 @@ if [ "$1" = "build" ]; then
             port=""
             user=""
 
-            if [ $# -gt 4 ]; then
-                ip=$5
-                if [ $# -gt 5]; then
-                    port=$6
-                    if [ $# -gt 6]; then
-                        user=$7
-                        if [ $# -gt 7]; then
-                            error "Too many arguments provided"
+            if [ "$2" = "macos" ] || [ "$2" = "macosx" ]; then
+                sudo cp ./build/rmaslr /usr/bin/rmaslr
+                chmod 755 /usr/bin/rmaslr
+            else
+                if [ $# -gt 4 ]; then
+                    ip=$5
+                    if [ $# -gt 5]; then
+                        port=$6
+                        if [ $# -gt 6]; then
+                            user=$7
+                            if [ $# -gt 7]; then
+                                error "Too many arguments provided"
+                            fi
+                        else
+                            user=$THEOS_DEVICE_USER
                         fi
                     else
+                        port=$THEOS_DEVICE_PORT
                         user=$THEOS_DEVICE_USER
                     fi
                 else
+                    ip=$THEOS_DEVICE_IP
                     port=$THEOS_DEVICE_PORT
                     user=$THEOS_DEVICE_USER
                 fi
-            else
-                ip=$THEOS_DEVICE_IP
-                port=$THEOS_DEVICE_PORT
-                user=$THEOS_DEVICE_USER
-            fi
 
-            scp -P $port "build/rmaslr" root@$ip:/usr/bin/
+                scp -P $port "build/rmaslr" root@$ip:/usr/bin/
+            fi
         else
             error "Invalid Option \"$3\""
         fi
