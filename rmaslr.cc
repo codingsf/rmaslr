@@ -110,17 +110,16 @@ std::string rmaslr::platform::load_from_filesystem() noexcept {
 }
 
 size_t rmaslr::get_size(size_t size) noexcept {
+    size_t length = 1;
     if (!size) {
-        return 1;
+        return length;
     }
 
-    auto length = 0;
     double size_ = size;
-
-    do {
-        size_ /= 10;
+    while (size_ / 10 >= 1) {
         length++;
-    } while (size_ / 10 >= 1);
+        size_ /= 10;
+    }
 
     return length;
 }
