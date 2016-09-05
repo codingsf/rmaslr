@@ -14,34 +14,14 @@
 #include <string>
 #include <vector>
 
-#include <CoreFoundation/CoreFoundation.h>
-#include <mach-o/loader.h>
-#include <mach-o/fat.h>
-#include <mach-o/arch.h>
-
 #include <dirent.h>
 #include <dlfcn.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
-#define assert_(str, ...) fprintf(stderr, "\x1B[31mError:\x1B[0m " str "\n", ##__VA_ARGS__); return -1
-
-#define notice(str, ...) fprintf(stdout, "\x1B[33mNotice:\x1B[0m " str "\n", ##__VA_ARGS__);
-#define error(str, ...) fprintf(stderr, "\x1B[31mError:\x1B[0m " str "\n", ##__VA_ARGS__); exit(0)
+#include "rmaslr.h"
 
 //compatibility with linter-clang and older headers
-#if !defined(FAT_MAGIC_64) && !defined(FAT_CIGAM_64)
-struct fat_arch_64 {
-    cpu_type_t cputype;
-    cpu_subtype_t cpusubtype;
-    uint64_t offset;
-    uint64_t size;
-    uint32_t align;
-};
-
-#define FAT_MAGIC_64 0xcafebabf
-#define FAT_CIGAM_64 0xbfbafeca
-#endif
 
 #ifdef DEBUG
 #define log(str, ...) fprintf(stderr, "[rmaslr] " __FILE__ ":%d DEBUG: " str "\n", __LINE__, ##__VA_ARGS__);
@@ -87,427 +67,6 @@ namespace environment {
     static std::string current_directory = get_current_directory();
 }
 
-namespace std {
-    auto is_in_map = [](std::vector<std::map<const char *, std::string>> vector, std::string value) noexcept {
-        for (const auto& item : vector) {
-            for (const auto& item_ : item) {
-                if (item_.second == value) {
-                    return true;
-                }
-            }
-        }
-
-        return false;
-    };
-
-    auto find_last_component = [](const std::string& string) noexcept {
-        auto pos = string.find_last_of('/');
-        if (pos == std::string::npos) {
-            return std::string(string); //make a copy
-        }
-
-        if (pos == string.length()) {
-            return std::string("");
-        }
-
-        return string.substr(pos + 1);
-    };
-
-    auto case_compare = [](std::string first, std::string second) {
-        auto first_size = first.size();
-        auto second_size = second.size();
-
-        auto size = std::min(first_size, second_size);
-        for (auto i = 0; i < size; i++) {
-            char fc = tolower(first[i]);
-            char sc = tolower(second[i]);
-
-            if (fc == sc) {
-                continue;
-            }
-
-            return fc < sc;
-        }
-
-        return first_size < second_size;
-    };
-}
-
-namespace rmaslr {
-    class platform {
-    public:
-        static bool iphoneos() noexcept {
-            return get_platform() == "iPhone OS";
-        }
-
-        static bool macosx() noexcept {
-            return get_platform() == "Mac OS X";
-        }
-    private:
-        static std::string get_platform() noexcept {
-            static std::string platform = load_from_filesystem();
-            return platform;
-        }
-
-        static std::string load_from_filesystem() {
-            const char *path = "/System/Library/CoreServices/SystemVersion.plist";
-            if (access(path, F_OK) != 0) {
-                error("platform::load_from_filesystem(); File does not exists at path (\"%s\"), possibly corrupted or not unix/linux system", path);
-            }
-
-            CFStringRef pathString = CFStringCreateWithCString(kCFAllocatorDefault, path, kCFStringEncodingUTF8);
-            if (!pathString) {
-                error("platform::load_from_filesystem(); Unable to allocate CFStringRef, errno=%d(%s)", errno, strerror(errno));
-            }
-
-            CFURLRef pathURL = CFURLCreateWithFileSystemPath(kCFAllocatorDefault, pathString, kCFURLPOSIXPathStyle, false);
-            if (!pathURL) {
-                error("platform::load_from_filesystem(); Unable to allocate CFURLRef, errno=%d(%s)", errno, strerror(errno));
-            }
-
-            CFReadStreamRef pathStream = CFReadStreamCreateWithFile(kCFAllocatorDefault, pathURL);
-            if (!pathStream) {
-                error("platform::load_from_filesystem(); Unable to create CFReadStream from file (\"%s\"), errno=%d(%s)", path, errno, strerror(errno));
-            }
-
-            CFReadStreamOpen(pathStream);
-
-            CFErrorRef pathError = nullptr;
-            CFDictionaryRef pathPlist = (CFDictionaryRef)CFPropertyListCreateWithStream(kCFAllocatorDefault, pathStream, 0, kCFPropertyListImmutable, nullptr, &pathError);
-
-            if (pathError) {
-                const char *error_string = CFStringGetCStringPtr(CFErrorCopyDescription(pathError), kCFStringEncodingUTF8);
-                error("platform::load_from_filesystem(); Failed to open property list at path (\"%s\"), with error: \"%s\"", path, error_string);
-            }
-
-            if (!pathPlist) {
-                error("platform::load_from_filesystem(); Failed to open property list at path (\"%s\"), errno=%d(%s)", path, errno, strerror(errno));
-            }
-
-            if (CFGetTypeID(pathPlist) != CFDictionaryGetTypeID()) {
-                error("platform::load_from_filesystem(); Property list at path (\"%s\") is not a dictionary", path);
-            }
-
-            CFStringRef operatingSystemKey = CFStringCreateWithCString(kCFAllocatorDefault, "ProductName", kCFStringEncodingUTF8);
-            if (!operatingSystemKey) {
-                error("platform::load_from_filesystem(); Unable to allocate buffer for storing key (\"PlatformName\"), errno=%d(%s)", errno, strerror(errno));
-            }
-
-            if (!CFDictionaryContainsKey(pathPlist, operatingSystemKey)) {
-                error("platform::load_from_filesystem(); Unable to find key (\"ProductName\") in dictionary", errno, strerror(errno));
-            }
-
-            CFStringRef platform = (CFStringRef)CFDictionaryGetValue(pathPlist, operatingSystemKey);
-            if (!platform) {
-                error("platform::load_from_filesystem(); Unable to get value for key (\"PlatformName\")", errno, strerror(errno));
-            }
-
-            if (CFGetTypeID(platform) != CFStringGetTypeID()) {
-                error("platform::load_from_filesystem(); Platform from path (\"%s\") is not a string", path);
-            }
-
-            return CFStringGetCStringPtr(platform, kCFStringEncodingUTF8);
-        }
-    };
-
-    template <typename T>
-    T request_input(std::string question, std::vector<T> values = std::vector<T>()) {
-        T input;
-
-        auto is_valid = [&values](T input) {
-            if (!values.size()) {
-                return true;
-            }
-
-            for (const auto& value : values) {
-                if (input != value) {
-                    continue;
-                }
-
-                return true;
-            }
-
-            return false;
-        };
-
-        do {
-            std::cout << question;
-            std::cin >> input;
-        } while (!is_valid(input));
-
-        return input;
-    }
-
-    template <typename T>
-    T request_input_ranged(std::string question, std::pair<T, T> range) {
-        T input;
-
-        do {
-            std::cout << question;
-            std::cin >> input;
-        } while (input < range.first || input > range.second);
-
-        return input;
-    }
-
-    auto get_size = [](size_t size) {
-        if (!size) {
-            return 1;
-        }
-
-        auto length = 0;
-        double size_ = size;
-
-        do {
-            size_ /= 10;
-            length++;
-        } while (size_ / 10 >= 1);
-
-        return length;
-    };
-
-    static uint32_t swap(uint32_t magic, uint32_t value) noexcept {
-        if (magic == MH_CIGAM || magic == MH_CIGAM_64 || magic == FAT_CIGAM || magic == FAT_CIGAM_64) {
-            value = ((value >> 8) & 0x00ff00ff) | ((value << 8) & 0xff00ff00);
-            value = ((value >> 16) & 0x0000ffff) | ((value << 16) & 0xffff0000);
-        }
-
-        return value;
-    }
-
-    static uint64_t swap(uint32_t magic, uint64_t value) noexcept {
-        if (magic == MH_CIGAM || magic == MH_CIGAM_64 || magic == FAT_CIGAM || magic == FAT_CIGAM_64) {
-            value = (value & 0x00000000ffffffff) << 32 | (value & 0xffffffff00000000) >> 32;
-            value = (value & 0x0000ffff0000ffff) << 16 | (value & 0xffff0000ffff0000) >> 16;
-            value = (value & 0x00ff00ff00ff0ff) << 8  | (value & 0xff00ff00ff00ff00) >> 8;
-        }
-
-        return value;
-    }
-
-    static inline int32_t swap(uint32_t magic, int32_t value) noexcept {
-        return static_cast<int32_t>(swap(magic, static_cast<uint32_t>(value)));
-    }
-
-    __attribute__((unused))
-    static inline int64_t swap(uint32_t magic, int64_t value) noexcept {
-        return static_cast<int64_t>(swap(magic, static_cast<uint64_t>(value)));
-    }
-
-    __printflike(1, 2)
-    std::string formatted_string(const char *string, ...) {
-        va_list list;
-
-        va_start(list, string);
-        int size = vsnprintf(nullptr, 0, string, list);
-        va_end(list);
-
-        std::string formatted(size + 1, '\0'); //+ 1 for null-byte
-
-        va_start(list, string);
-        vsprintf(const_cast<char *>(formatted.data()), string, list);
-        va_end(list);
-
-        return formatted;
-    };
-
-    auto parse_application_container = [](const std::string& path) {
-        std::string name = std::find_last_component(path);
-
-        auto information = std::map<const char *, std::string>();
-        auto pos = name.find(".app");
-
-        if (pos == std::string::npos) {
-            return information;
-        }
-
-        if (pos == 0 || pos != (name.length() - (sizeof(".app") - 1))) {
-            return information;
-        }
-
-        std::string infoPath = path + "/Contents/Info.plist";
-        if (access(infoPath.c_str(), F_OK) != 0) {
-            return information;
-        }
-
-        CFStringRef pathString = CFStringCreateWithCString(kCFAllocatorDefault, infoPath.c_str(), kCFStringEncodingUTF8);
-        if (!pathString) {
-            return information;
-        }
-
-        CFURLRef pathURL = CFURLCreateWithFileSystemPath(kCFAllocatorDefault, pathString, kCFURLPOSIXPathStyle, false);
-        if (!pathString) {
-            return information;
-        }
-
-        CFReadStreamRef pathStream = CFReadStreamCreateWithFile(kCFAllocatorDefault, pathURL);
-        if (!pathStream) {
-            return information;
-        }
-
-        CFReadStreamOpen(pathStream);
-
-        CFErrorRef pathError = nullptr;
-        CFPropertyListRef pathPlist = CFPropertyListCreateWithStream(kCFAllocatorDefault, pathStream, 0, kCFPropertyListImmutable, nullptr, &pathError);
-
-        if (pathError) {
-            return information;
-        }
-
-        if (!pathPlist) {
-            return information;
-        }
-
-        if (CFGetTypeID(pathPlist) != CFDictionaryGetTypeID()) {
-            return information;
-        }
-
-        information = {
-            { "bundleIdentifier", "" },
-            { "containerName", name.substr(0, pos) },
-            { "displayName", "" },
-            { "executableName", "" },
-            { "executablePath", ""}
-        };
-
-        CFStringRef applicationKey = CFStringCreateWithCString(kCFAllocatorDefault, "CFBundleName", kCFStringEncodingUTF8);
-        CFStringRef identifierKey = CFStringCreateWithCString(kCFAllocatorDefault, "CFBundleIdentifier", kCFStringEncodingUTF8);
-        CFStringRef executableKey = CFStringCreateWithCString(kCFAllocatorDefault, "CFBundleExecutable", kCFStringEncodingUTF8);
-
-        CFDictionaryRef info = (CFDictionaryRef)pathPlist;
-        if (CFDictionaryContainsKey(info, executableKey)) {
-            CFStringRef executableName = (CFStringRef)CFDictionaryGetValue(info, executableKey);
-            if (executableName) {
-                if (CFGetTypeID(executableName) == CFStringGetTypeID()) {
-                    const char *executable_name = CFStringGetCStringPtr(executableName, kCFStringEncodingUTF8);
-                    information["executableName"] = executable_name;
-
-                    std::string executablePath = path + "/Contents/MacOS/";
-                    executablePath += executable_name;
-
-                    information["executablePath"] = executablePath;
-                }
-            }
-        }
-
-        if (CFDictionaryContainsKey(info, applicationKey)) {
-            CFStringRef applicationName = (CFStringRef)CFDictionaryGetValue(info, applicationKey);
-            if (applicationName) {
-                if (CFGetTypeID(applicationName) == CFStringGetTypeID()) {
-                    information["displayName"] = CFStringGetCStringPtr(applicationName, kCFStringEncodingUTF8);
-                }
-            }
-        }
-
-        if (CFDictionaryContainsKey(info, identifierKey)) {
-            CFStringRef identifier = (CFStringRef)CFDictionaryGetValue(info, identifierKey);
-            if (identifier) {
-                if (CFGetTypeID(identifier) == CFStringGetTypeID()) {
-                    information["bundleIdentifier"] = CFStringGetCStringPtr(identifier, kCFStringEncodingUTF8);
-                }
-            }
-        }
-
-        return information;
-    };
-
-    class file {
-    public:
-        file(const char *path, const char *mode = "r+") : file_(fopen(path, mode)) {
-            if (!file_) {
-                error("rmaslr::file() - Unable to open file at path (\"%s\"), with mode (\"%s\") (fopen(path, mode) failed), errno=%d(%s)", path, mode, errno, strerror(errno));
-            }
-
-            if (::stat(path, &sbuf_) != 0) {
-                error("rmaslr::file() - Unable to gather information on file at path (\"%s\"), (::stat(path, &sbuf_) failed), errno=%d(%s)", path, errno, strerror(errno));
-            }
-        }
-
-        file(FILE *file) : file_(file) {
-            if (!file) {
-                error("rmaslr::file() : file is null");
-            }
-
-            position_ = ftell(file_);
-        }
-
-        inline ~file() noexcept {
-            fclose(file_);
-        }
-
-        inline long position() const noexcept {
-            return position_;
-        }
-
-        enum class seek_type {
-            origin,
-            current,
-            end
-        };
-
-        void seek(long position, seek_type seek) noexcept {
-            switch (seek) {
-            case seek_type::origin:
-                if (sbuf_.st_size < position) {
-                    error("file::seek() - Cannot seek past end of file (position=%ld, size=%lld)", position, sbuf_.st_size);
-                }
-
-                position_ = position;
-                break;
-            case seek_type::current:
-                if ((sbuf_.st_size - position_) < position) {
-                    error("file::seek() - Cannot seek past end of file (position=%ld, size=%lld)", position, sbuf_.st_size);
-                }
-
-                position_ += position;
-                break;
-            case seek_type::end:
-                if (sbuf_.st_size < position) {
-                    error("file::seek() - Cannot seek past end of file (position=%ld, size=%lld)", position, sbuf_.st_size);
-                }
-
-                position_ = sbuf_.st_size - position;
-                break;
-            }
-
-            if (fseek(file_, position, (int)seek) != 0) {
-                error("file::seek() - Unable to seek to position (%ld), (fseek(file_, position, (int)seek) failed), errno=%d(%s)", position, errno, strerror(errno));
-            }
-        }
-
-        template<typename T>
-        T read() noexcept {
-            T *buffer = static_cast<T *>(malloc(sizeof(T)));
-            if (!buffer) {
-                error("file::read() - Unable to allocate buffer needed to read data of size %ld, errno=%d(%s)", sizeof(T), errno, strerror(errno));
-            }
-
-            if (fread(buffer, sizeof(T), 1, file_) != 1) {
-                error("file::read() - Unable to read from file at offset %.16lX, errno=%d(%s)", position_, errno, strerror(errno));
-            }
-
-            position_ += sizeof(T);
-            return *buffer;
-        }
-
-        template <typename T>
-        void write(T buff) noexcept {
-            if (fwrite(file_, sizeof(T), 1, file_) != 1) {
-                error("file::write() - Unable to write to file at position (%ld), errno=%d(%s)", position_, errno, strerror(errno));
-            }
-        }
-
-        inline struct stat stat() const noexcept {
-            return sbuf_;
-        }
-    private:
-        FILE *file_ = nullptr;
-        long position_ = 0x0;
-
-        struct stat sbuf_ = {};
-    };
-}
-
 static CFArrayRef (*SBSCopyApplicationDisplayIdentifiers)(bool onlyActive, bool debugging) = nullptr;
 
 static CFStringRef (*SBSCopyLocalizedApplicationNameForDisplayIdentifier)(CFStringRef bundle_id) = nullptr;
@@ -532,12 +91,6 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
     if (argc < 2) {
         print_usage();
     }
-
-    //for fancy debug messages
-    bool uses_application = false;
-
-    bool display_archs = false;
-    bool check_aslr = false;
 
     const char *name = nullptr;
     const char *binary_path = nullptr;
@@ -1015,7 +568,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
                 binary_path = strdup(application_information["executablePath"].c_str());
             }
 
-            uses_application = true;
+            rmaslr::options::application(true);
             if (access(binary_path, R_OK) != 0) {
                 if (access(binary_path, F_OK) != 0) {
                     assert_("Application (%s)'s executable does not exist, at path (%s)", name, binary_path);
@@ -1058,7 +611,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
                     assert_("Executable at path (\"%s\") is not valid (either not found in Info.plist or not present on the filesystem)", path);
                 }
 
-                uses_application = true;
+                rmaslr::options::application(true);
             }
 
             binary_path = path;
@@ -1078,7 +631,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
                 assert_("Please select an application or binary first");
             }
 
-            if (display_archs) {
+            if (rmaslr::options::display_archs()) {
                 assert_("Cannot print architectures and choose an architecture from which to remove ASLR from at the same time");
             }
 
@@ -1109,21 +662,21 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
                 assert_("Cannot both display architectures and select an arch to remove ASLR from");
             }
 
-            if (display_archs) {
+            if (rmaslr::options::display_archs()) {
                 assert_("rmaslr is already configured to only print architectures");
             }
 
-            display_archs = true;
+            rmaslr::options::display_archs(true);
         } else if (strcmp(option, "c") == 0 || strcmp(option, "check") == 0) {
             if (!binary_path) {
                 assert_("Please select an application or binary first");
             }
 
-            if (check_aslr) {
+            if (rmaslr::options::check_aslr()) {
                 assert_("rmaslr is already configured to check for aslr");
             }
 
-            check_aslr = true;
+            rmaslr::options::check_aslr(true);
         } else {
             assert_("Unrecognized option %s", argument);
         }
@@ -1137,7 +690,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
     struct stat sbuf = file.stat();
 
     if (sbuf.st_size < sizeof(struct mach_header_64)) {
-        if (uses_application) {
+        if (rmaslr::options::application()) {
             assert_("Application (%s)'s executable is not a valid mach-o", name);
         }
 
@@ -1160,7 +713,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
             is_fat = true;
             break;
         default: {
-            if (uses_application) {
+            if (rmaslr::options::application()) {
                 assert_("Application (%s)'s executable is not a valid mach-o", name);
             }
 
@@ -1177,7 +730,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
         return (flags_ & MH_PIE) > 0;
     };
 
-    auto remove_aslr = [&file, &name, &has_aslr, &uses_application](long offset, struct mach_header header, const NXArchInfo *archInfo = nullptr) {
+    auto remove_aslr = [&file, &name, &has_aslr](long offset, struct mach_header header, const NXArchInfo *archInfo = nullptr) {
         uint32_t flags;
         bool aslr = has_aslr(header, &flags);
 
@@ -1185,7 +738,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
             if (archInfo) {
                 fprintf(stdout, "Architecture (%s) does not contain ASLR\n", archInfo->name);
             } else {
-                if (uses_application) {
+                if (rmaslr::options::application()) {
                     error("Application (%s) does not contain ASLR", name);
                 } else {
                     error("File (%s) does not contain ASLR", name);
@@ -1198,7 +751,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
         //ask user if should remove ASLR for arm64
         int32_t cputype = rmaslr::swap(header.magic, header.cputype);
         if (cputype == CPU_TYPE_ARM64) {
-            std::string question = rmaslr::formatted_string("Removing ASLR on a 64-bit arm %s (%s) can result in it crashing. Are you sure you want to continue (y/n): ", uses_application ? "application" : "file", name);
+            std::string question = rmaslr::formatted_string("Removing ASLR on a 64-bit arm %s (%s) can result in it crashing. Are you sure you want to continue (y/n): ", rmaslr::options::application() ? "application" : "file", name);
             std::string result = rmaslr::request_input<std::string>(question, { "y", "n" });
 
             if (result == "n" || result == "N") {
@@ -1230,7 +783,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
 
         uint32_t architectures_count = rmaslr::swap(magic, fat.nfat_arch);
         if (!architectures_count) {
-            if (uses_application) {
+            if (rmaslr::options::application()) {
                 assert_("Application (%s)'s executable cannot have 0 architectures", name);
             }
 
@@ -1239,7 +792,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
 
         if (magic == FAT_MAGIC_64 || magic == FAT_CIGAM_64) {
             if (architectures_count * sizeof(struct fat_arch_64) > sbuf.st_size) {
-                if (uses_application) {
+                if (rmaslr::options::application()) {
                     assert_("Application (%s)'s executable is too small to contain %d architectures", name, architectures_count);
                 }
 
@@ -1258,10 +811,10 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
                     assert_("Architecture at offset 0x%.16lX is not valid", current_offset);
                 }
 
-                if (display_archs) {
+                if (rmaslr::options::display_archs()) {
                     architectures.push_back(archInfo);
 
-                    if (!check_aslr) {
+                    if (!rmaslr::options::check_aslr()) {
                         continue;
                     }
                 }
@@ -1288,7 +841,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
 
                 //basic validation
                 if (header_offset < current_offset) {
-                    if (uses_application) {
+                    if (rmaslr::options::application()) {
                         assert_("Application (%s) executable's architecture #%d is placed before its declaration", name, i + 1);
                     }
 
@@ -1296,7 +849,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
                 }
 
                 if (header_offset > sbuf.st_size) {
-                    if (uses_application) {
+                    if (rmaslr::options::application()) {
                         assert_("Application (%s) executable's architecture #%d is placed past end of file", name, i + 1);
                     }
 
@@ -1311,7 +864,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
             }
         } else {
             if (architectures_count * sizeof(struct fat_arch) > sbuf.st_size) {
-                if (uses_application) {
+                if (rmaslr::options::application()) {
                     assert_("Application (%s)'s executable is too small to contain %d architectures", name, architectures_count);
                 }
 
@@ -1330,10 +883,10 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
 
                 current_offset += sizeof(struct fat_arch);
 
-                if (display_archs) {
+                if (rmaslr::options::display_archs()) {
                     architectures.push_back(archInfo);
 
-                    if (!check_aslr) {
+                    if (!rmaslr::options::check_aslr()) {
                         continue;
                     }
                 }
@@ -1360,7 +913,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
 
                 //basic validation
                 if (header_offset < current_offset) {
-                    if (uses_application) {
+                    if (rmaslr::options::application()) {
                         assert_("Application (%s) executable's architecture #%d is placed before its declaration", name, i + 1);
                     }
 
@@ -1368,7 +921,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
                 }
 
                 if (header_offset > sbuf.st_size) {
-                    if (uses_application) {
+                    if (rmaslr::options::application()) {
                         assert_("Application (%s) executable's architecture #%d is placed past end of file", name, i + 1);
                     }
 
@@ -1395,7 +948,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
                     continue;
                 }
 
-                if (uses_application) {
+                if (rmaslr::options::application()) {
                     notice("Application (%s) does not contain multiple architectures, but the executable is of type \"%s\", so program execution will commence", name, archInfo->name);
                 } else {
                     notice("File (%s) does not contain multiple architectures, but the executable is of type \"%s\", so program execution will commence", name, archInfo->name);
@@ -1405,7 +958,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
             }
 
             if (it == default_architectures.end()) {
-                if (uses_application) {
+                if (rmaslr::options::application()) {
                     notice("Application (%s) does not contain multiple architectures, but you can still specify architecture \"%s\" to remove ASLR from the executable", name, archInfo->name);
                 } else {
                     notice("File (%s) does not contain multiple architectures, but you can still specify architecture \"%s\" to remove ASLR from it", name, archInfo->name);
@@ -1418,10 +971,10 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
         headers.emplace(0x0, header);
     }
 
-    if (display_archs) {
+    if (rmaslr::options::display_archs()) {
         auto size = architectures.size();
         if (size) {
-            if (uses_application) {
+            if (rmaslr::options::application()) {
                 fprintf(stdout, "Application (%s) contains %ld architectures:\n", name, size);
             } else {
                 fprintf(stdout, "File (%s) contains %ld architectures:\n", name, size);
@@ -1430,7 +983,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
             int i = 0;
             for (const NXArchInfo *archInfo : architectures) {
                 fprintf(stdout, "%s", archInfo->name);
-                if (check_aslr) {
+                if (rmaslr::options::check_aslr()) {
                     bool aslr = has_aslr(headers[i]);
                     fprintf(stdout, " (%s", aslr ? "contains ASLR" : "does not contain ASLR");
 
@@ -1445,7 +998,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
                 fprintf(stdout, "\n");
             }
         } else {
-            if (uses_application) {
+            if (rmaslr::options::application()) {
                 assert_("Application (%s) is not fat", name);
             } else {
                 assert_("File (%s) is not fat", name);
@@ -1455,7 +1008,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
         return 0;
     }
 
-    if (check_aslr) {
+    if (rmaslr::options::check_aslr()) {
         for (const auto& item : headers) {
             struct mach_header header = item.second;
 
@@ -1510,7 +1063,7 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
     }
 
     if (removed_aslr) {
-        if (uses_application) {
+        if (rmaslr::options::application()) {
             notice("Application (%s) may not run til you have signed its executable (at path %s) (preferably with ldid)", name, binary_path);
         } else {
             notice("File may not run til you have signed it (preferably with ldid)");
