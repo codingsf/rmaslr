@@ -446,6 +446,10 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
                     applications_found.push_back(information);
                 }
             } else {
+                if (!rmaslr::is_root()) {
+                    error("rmaslr needs to be run as root on mac when selecting mac applications placed in /Applications/");
+                }
+
                 DIR *directory = opendir("/Applications");
                 if (!directory) {
                     error("Unable to access directory \"/Applications\".");
@@ -620,7 +624,11 @@ int main(int argc, const char * argv[], const char * envp[]) noexcept {
                     assert_("File at path (%s) does not exist", binary_path);
                 }
 
-                assert_("Unable to read file at path (%s)", binary_path);
+                if (rmaslr::is_root()) {
+                    assert_("Unable to read file at path (%s)", binary_path);
+                } else {
+                    assert_("Unable to read file at path (%s). Try running as root", binary_path);
+                }
             }
         } else if (strcmp(option, "arch") == 0 || strcmp(option, "architecture") == 0) {
             if (last_argument) {

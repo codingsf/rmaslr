@@ -86,6 +86,10 @@ namespace rmaslr {
         static std::string load_from_filesystem() noexcept;
     };
 
+    inline bool is_root() noexcept {
+        return geteuid() == 0;
+    }
+
     template <typename T>
     T request_input(std::string question, std::vector<T> values = std::vector<T>()) {
         T input;
